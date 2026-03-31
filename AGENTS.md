@@ -129,8 +129,11 @@ At the END of every prompt, BEFORE responding to the user:
 | `src/core/queue.ts` | MergeQueue class — ordered merge queue for concurrent agents |
 | `src/core/oplog.ts` | OperationLog class — track every write op per branch |
 | `src/core/proxy.ts` | BranchProxy class — CRUD proxy with auto-materialization |
+| `src/core/commit.ts` | CommitEngine class — content-addressed commits, SHA-256, parent chains, tags, cherry-pick, revert |
+| `src/core/protection.ts` | ProtectionManager class — branch protection rules, glob patterns |
+| `src/core/hooks.ts` | HookManager class — 14 event types, pre-reject/post-fire-and-forget |
 | `src/core/types.ts` | TypeScript types, interfaces, config, constants |
-| `src/cli.ts` | Commander.js CLI entry point (`mb branch` commands) |
+| `src/cli.ts` | Commander.js CLI entry point (`mb branch`, `mb commit` commands) |
 | `src/mcp/server.ts` | MCP Server — stdio transport, tool registration |
 | `src/mcp/tools.ts` | MCP tool handlers — create/list/diff/merge wired to engines |
 | `src/mcp/mongobranch.agent.md` | Agent skill file — teaches AI agents to use MongoBranch |
@@ -149,6 +152,9 @@ At the END of every prompt, BEFORE responding to the user:
 | `tests/core/queue.test.ts` | Merge queue — enqueue, FIFO, processAll |
 | `tests/core/oplog.test.ts` | Operation log — record, query, summary, undo |
 | `tests/core/proxy.test.ts` | CRUD proxy — insert/update/delete, lazy auto-materialize |
+| `tests/core/commit.test.ts` | Commit engine — create, chain, log, common ancestor, merge commits, tags |
+| `tests/core/three-way-merge.test.ts` | Three-way merge — clean merge, conflict detection, resolution strategies |
+| `tests/core/lifecycle.test.ts` | Branch TTL, reset from parent, protection rules, hooks — Wave 5 |
 | `tests/core/stress.test.ts` | Stress tests — concurrent, large docs, queue, lazy CoW, lifecycle |
 | `tests/core/stress-ai.test.ts` | AI stress tests — real Voyage AI embeddings, sequential merge, hybrid search |
 | `tests/embedding.ts` | Voyage AI embedding helper — real API calls, cosine similarity |

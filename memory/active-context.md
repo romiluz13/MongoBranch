@@ -1,5 +1,82 @@
 # Active Context
 
+## Current State (2026-03-31)
+
+### Wave 4-8 Roadmap Validated & Complete
+- Deep competitive analysis done: Neon, Dolt, lakeFS, PlanetScale, Xata
+- **Critical finding**: Neon branches are ONE-WAY (no merge, no diff) — MongoBranch fills this gap
+- **Dolt's three-way merge algorithm** studied in detail (6-step process validated from engineering blog)
+- **lakeFS hooks** validated: 18 event types, pre-hooks reject (sync), post-hooks fire-and-forget
+- **Neon PII anonymization** validated: static masking v1, dynamic masking planned
+- Roadmap expanded from v0.7.0 → v1.1.0 with 5 new waves, ~40 features, ~240 total tests
+- Phase 5.4 hooks expanded from 6 → 14 event types based on lakeFS validation
+- GitHub pushed: https://github.com/romiluz13/MongoBranch
+
+### ✅ Phase 4.1: Commit Engine — COMPLETE
+- `CommitEngine` class in `src/core/commit.ts` — 255 lines
+- Content-addressed SHA-256 hashes, parent chains, merge commits (two parents)
+- `commit()`, `getCommit()`, `getLog()`, `getCommonAncestor()`, `getCommitCount()`
+- HEAD pointer tracked via `headCommit` on BranchMetadata
+- 13 TDD tests, all passing (138 total, zero failures)
+- 3 MCP tools added: `commit`, `get_commit`, `commit_log` (total: 28 tools)
+- 2 CLI commands added: `mb commit <branch> -m`, `mb commits <branch>`
+
+### ✅ Phase 4.2: Tags & Refs — COMPLETE
+- Tag methods added to `CommitEngine` (createTag, deleteTag, listTags, getTag)
+- Immutability enforced: duplicate tag names rejected
+- 9 TDD tests, all passing (147 total, zero failures)
+- 3 MCP tools: `create_tag`, `list_tags`, `delete_tag` (total: 31 tools)
+- CLI: `mb tag create/list/delete` — 3 subcommands
+
+### ✅ Phase 4.3: Three-Way Merge — COMPLETE
+- `DiffEngine.diff3()` — three-way diff with per-field comparison
+- `MergeEngine.threeWayMerge()` — coordinates ancestor + diff3 + apply + merge commit
+- Conflict strategies: manual (report), ours, theirs (auto-resolve)
+- 5 TDD tests, all passing. 1 MCP tool: `merge_three_way` (total: 32 tools)
+- Uses sourceDatabase as merge base (both branches fork from it)
+
+### ✅ Phase 4.4: Cherry-Pick & Revert — COMPLETE
+- `cherryPick()` — applies single commit's changes via snapshot diff, creates new commit
+- `revert()` — creates inverse commit that undoes changes (drops added collections)
+- 6 TDD tests, all passing. 2 MCP tools: `cherry_pick`, `revert_commit` (total: 34 tools)
+- 2 CLI commands: `mb cherry-pick`, `mb revert`
+
+### 🎉 WAVE 4 COMPLETE — v0.7.0
+- All 4 phases done: Commits ✅, Tags ✅, Three-Way Merge ✅, Cherry-Pick & Revert ✅
+- 33 new tests (151 total across 14 files)
+- 9 new MCP tools (34 total)
+- 9 new CLI commands
+
+### 🎉 WAVE 5 COMPLETE — v0.8.0
+- **Phase 5.1**: Branch TTL — `expiresAt`, `extendBranch()`, `setBranchExpiration()` — 6 tests
+- **Phase 5.2**: Reset from Parent — `resetFromParent()` drops & re-copies — 2 tests
+- **Phase 5.3**: Branch Protection — `ProtectionManager` class, glob patterns, merge-only — 7 tests
+- **Phase 5.4**: Hooks & Webhooks — `HookManager` class, 14 event types, pre-reject/post-fire — 8 tests
+- New files: `src/core/protection.ts`, `src/core/hooks.ts`, `tests/core/lifecycle.test.ts`
+- 7 new MCP tools: `set_branch_ttl`, `reset_from_parent`, `protect_branch`, `list_protections`, `remove_protection`, `list_hooks`, `remove_hook` (total: 41 tools)
+
+### Next Up: Wave 6 — Time Travel & Audit (v0.9.0)
+- Phase 6.1: Time Travel (query branch state at any commit)
+- Phase 6.2: Blame (who changed what, when)
+- Phase 6.3: Deploy Requests (PR-like workflow for data changes)
+
+### Key Architecture Decisions Made
+- Three-way merge: 6-step process (Dolt-validated) — merge base via BFS, per-field conflicts
+- Hook execution: sync pre-hooks (fail-fast rejection), async post-hooks (lakeFS-validated)
+- PII anonymization: static masking on branch create, with path to dynamic (Neon-validated)
+
+### Key Architecture Decisions Pending
+- Commit snapshot format: full snapshot vs delta from parent?
+- Deploy request: store diff at creation vs compute on demand?
+
+### Full Audit Complete (2026-03-31)
+- **181 tests, 0 failures, 544 assertions across 15 files**
+- All source files verified: 12 in `src/core/`, 3 in `src/mcp/`, 1 CLI
+- All test files verified: 14 in `tests/core/`, 1 in `tests/mcp/`
+- Real Voyage AI embeddings verified: 512-dim vectors, semantic similarity correct
+- Roadmap checkboxes fixed: all Wave 5 sub-items now [x]
+- Deferred items documented: partial reset (Wave 7), webhooks (Wave 6)
+
 > Living document — updated as we work. Read this FIRST at session start.
 
 ## Project Name

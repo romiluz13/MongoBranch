@@ -307,6 +307,144 @@ async function main(): Promise<void> {
     },
   }, async (args) => tools.branch_undo(args));
 
+  // ── Tool: commit (Wave 4) ─────────────────────────────────
+  mcpServer.registerTool("commit", {
+    description: "Create an immutable, content-addressed commit on a branch. Snapshots current state with SHA-256 hash.",
+    inputSchema: {
+      branchName: z.string().describe("Branch to commit on"),
+      message: z.string().describe("Commit message describing the changes"),
+      author: z.string().optional().describe("Author of the commit"),
+    },
+  }, async (args) => tools.commit(args));
+
+  // ── Tool: get_commit (Wave 4) ─────────────────────────────
+  mcpServer.registerTool("get_commit", {
+    description: "Retrieve a single commit by its SHA-256 hash.",
+    inputSchema: {
+      hash: z.string().describe("Full SHA-256 hash of the commit"),
+    },
+  }, async (args) => tools.get_commit(args));
+
+  // ── Tool: commit_log (Wave 4) ─────────────────────────────
+  mcpServer.registerTool("commit_log", {
+    description: "Walk the commit history of a branch. Returns commits in reverse chronological order (most recent first).",
+    inputSchema: {
+      branchName: z.string().describe("Branch to get history for"),
+      limit: z.number().optional().describe("Max commits to return (default: 50)"),
+    },
+  }, async (args) => tools.commit_log(args));
+
+  // ── Tool: create_tag (Wave 4) ─────────────────────────────
+  mcpServer.registerTool("create_tag", {
+    description: "Create an immutable named reference to a commit. Like git tag — for production checkpoints, rollback targets.",
+    inputSchema: {
+      name: z.string().describe("Tag name (e.g., 'v1.0', 'before-migration')"),
+      commitHash: z.string().optional().describe("Commit hash to tag (use this OR branchName)"),
+      branchName: z.string().optional().describe("Branch whose HEAD to tag (use this OR commitHash)"),
+      message: z.string().optional().describe("Tag message/annotation"),
+      author: z.string().optional().describe("Who created the tag"),
+    },
+  }, async (args) => tools.create_tag(args));
+
+  // ── Tool: list_tags (Wave 4) ──────────────────────────────
+  mcpServer.registerTool("list_tags", {
+    description: "List all tags with their commit references, sorted newest first.",
+    inputSchema: {},
+  }, async () => tools.list_tags());
+
+  // ── Tool: delete_tag (Wave 4) ─────────────────────────────
+  mcpServer.registerTool("delete_tag", {
+    description: "Delete a tag by name. The underlying commit is NOT affected.",
+    inputSchema: {
+      name: z.string().describe("Tag name to delete"),
+    },
+  }, async (args) => tools.delete_tag(args));
+
+  // ── Tool: merge_three_way (Wave 4) ────────────────────────
+  mcpServer.registerTool("merge_three_way", {
+    description: "Git-like three-way merge using common ancestor. Auto-merges non-overlapping changes, detects per-field conflicts. The feature Neon CAN'T do.",
+    inputSchema: {
+      sourceBranch: z.string().describe("Branch to merge FROM"),
+      targetBranch: z.string().describe("Branch to merge INTO"),
+      dryRun: z.boolean().optional().describe("Preview merge without applying changes"),
+      conflictStrategy: z.enum(["manual", "ours", "theirs"]).optional().describe("How to handle conflicts (default: manual)"),
+      author: z.string().optional().describe("Author of the merge commit"),
+      message: z.string().optional().describe("Merge commit message"),
+    },
+  }, async (args) => tools.merge_three_way(args));
+
+  // ── Tool: cherry_pick (Wave 4) ────────────────────────────
+  mcpServer.registerTool("cherry_pick", {
+    description: "Apply a single commit's changes to a target branch. Like git cherry-pick.",
+    inputSchema: {
+      targetBranch: z.string().describe("Branch to apply the commit to"),
+      commitHash: z.string().describe("SHA-256 hash of the commit to cherry-pick"),
+      author: z.string().optional().describe("Author of the cherry-pick commit"),
+    },
+  }, async (args) => tools.cherry_pick(args));
+
+  // ── Tool: revert_commit (Wave 4) ─────────────────────────
+  mcpServer.registerTool("revert_commit", {
+    description: "Undo a specific commit by creating an inverse commit. The original commit is preserved in history.",
+    inputSchema: {
+      branchName: z.string().describe("Branch to revert on"),
+      commitHash: z.string().describe("SHA-256 hash of the commit to revert"),
+      author: z.string().optional().describe("Author of the revert commit"),
+    },
+  }, async (args) => tools.revert_commit(args));
+
+  // ── Tool: set_branch_ttl (Wave 5) ──────────────────────────
+  mcpServer.registerTool("set_branch_ttl", {
+    description: "Set or remove TTL (time-to-live) on a branch. Branch auto-expires after TTL.",
+    inputSchema: {
+      branchName: z.string().describe("Branch to set TTL on"),
+      ttlMinutes: z.number().optional().describe("TTL in minutes from now"),
+      remove: z.boolean().optional().describe("Remove TTL from branch"),
+    },
+  }, async (args) => tools.set_branch_ttl(args));
+
+  // ── Tool: reset_from_parent (Wave 5) ──────────────────────
+  mcpServer.registerTool("reset_from_parent", {
+    description: "Reset branch data from parent — drops all branch data and re-copies from source. Metadata preserved.",
+    inputSchema: {
+      branchName: z.string().describe("Branch to reset"),
+    },
+  }, async (args) => tools.reset_from_parent(args));
+
+  // ── Tool: protect_branch (Wave 5) ──────────────────────────
+  mcpServer.registerTool("protect_branch", {
+    description: "Protect a branch or pattern — prevent direct writes, only merges allowed.",
+    inputSchema: {
+      pattern: z.string().describe("Branch name or glob pattern (e.g., 'main', 'prod-*')"),
+      requireMergeOnly: z.boolean().optional().describe("Only allow merges (default: true)"),
+      preventDelete: z.boolean().optional().describe("Prevent deletion (default: true)"),
+      createdBy: z.string().optional().describe("Who created the rule"),
+    },
+  }, async (args) => tools.protect_branch(args));
+
+  mcpServer.registerTool("list_protections", {
+    description: "List all branch protection rules.",
+    inputSchema: {},
+  }, async () => tools.list_protections());
+
+  mcpServer.registerTool("remove_protection", {
+    description: "Remove a branch protection rule.",
+    inputSchema: { pattern: z.string().describe("Pattern to unprotect") },
+  }, async (args) => tools.remove_protection(args));
+
+  // ── Tool: list_hooks (Wave 5) ─────────────────────────────
+  mcpServer.registerTool("list_hooks", {
+    description: "List all registered hooks, optionally filtered by event type.",
+    inputSchema: {
+      event: z.string().optional().describe("Filter by event type (e.g., 'pre-commit')"),
+    },
+  }, async (args) => tools.list_hooks(args));
+
+  mcpServer.registerTool("remove_hook", {
+    description: "Remove a registered hook by name.",
+    inputSchema: { name: z.string().describe("Hook name to remove") },
+  }, async (args) => tools.remove_hook(args));
+
   // ── Start stdio transport ───────────────────────────────────
   const transport = new StdioServerTransport();
   await mcpServer.connect(transport);

@@ -15,6 +15,7 @@ import { BranchManager } from "./core/branch.ts";
 import { DiffEngine } from "./core/diff.ts";
 import { MergeEngine } from "./core/merge.ts";
 import { HistoryManager } from "./core/history.ts";
+import { CommitEngine } from "./core/commit.ts";
 import type { MongoBranchConfig } from "./core/types.ts";
 import { DEFAULT_CONFIG } from "./core/types.ts";
 
@@ -317,6 +318,191 @@ program
           console.log(chalk.dim(`   Dropped: ${db}`));
         }
       }
+    } finally {
+      await client.close();
+    }
+  });
+
+// ── Commit Command (Wave 4) ─────────────────────────────────
+
+program
+  .command("commit <branch>")
+  .description("Create an immutable commit on a branch")
+  .requiredOption("-m, --message <text>", "Commit message")
+  .option("--author <name>", "Author of the commit")
+  .action(async (branch: string, opts) => {
+    const config = loadConfig();
+    const client = new MongoClient(config.uri);
+    try {
+      await client.connect();
+      const commitEngine = new CommitEngine(client, config);
+      await commitEngine.initialize();
+      const commit = await commitEngine.commit({
+        branchName: branch,
+        message: opts.message,
+        author: opts.author,
+      });
+      console.log(chalk.green(`✅ Commit created on "${branch}"`));
+      console.log(chalk.dim(`   Hash: ${commit.hash.slice(0, 12)}...`));
+      console.log(chalk.dim(`   Parent(s): ${commit.parentHashes.length > 0 ? commit.parentHashes.map((h: string) => h.slice(0, 8)).join(", ") : "(root)"}`));
+      console.log(chalk.dim(`   Collections: ${Object.keys(commit.snapshot.collections).join(", ")}`));
+    } finally {
+      await client.close();
+    }
+  });
+
+// ── Commit Log Command (Wave 4) ─────────────────────────────
+
+program
+  .command("commits <branch>")
+  .description("Show commit history for a branch")
+  .option("-n, --limit <count>", "Max commits to show", "20")
+  .action(async (branch: string, opts) => {
+    const config = loadConfig();
+    const client = new MongoClient(config.uri);
+    try {
+      await client.connect();
+      const commitEngine = new CommitEngine(client, config);
+      await commitEngine.initialize();
+      const log = await commitEngine.getLog(branch, parseInt(opts.limit));
+      if (log.commits.length === 0) {
+        console.log(chalk.dim(`No commits on branch "${branch}"`));
+        return;
+      }
+      console.log(chalk.bold(`Commit log for "${branch}" (${log.commits.length} commits):\n`));
+      for (const c of log.commits) {
+        const parents = c.parentHashes.length > 0
+          ? c.parentHashes.map((h: string) => h.slice(0, 8)).join(", ")
+          : "(root)";
+        console.log(chalk.yellow(`  ${c.hash.slice(0, 8)}`), chalk.white(c.message));
+        console.log(chalk.dim(`           ${c.author} · ${c.timestamp.toISOString()} · parents: ${parents}`));
+      }
+    } finally {
+      await client.close();
+    }
+  });
+
+// ── Tag Commands (Wave 4) ────────────────────────────────────
+
+const tagCmd = program
+  .command("tag")
+  .description("Manage tags — immutable named references to commits");
+
+tagCmd
+  .command("create <name>")
+  .description("Create a tag pointing to a commit or branch HEAD")
+  .option("--commit <hash>", "Commit hash to tag")
+  .option("--branch <name>", "Branch whose HEAD to tag")
+  .option("-m, --message <text>", "Tag annotation message")
+  .option("--author <name>", "Who created the tag")
+  .action(async (name: string, opts) => {
+    if (!opts.commit && !opts.branch) {
+      console.error(chalk.red("❌ Provide --commit <hash> or --branch <name>"));
+      process.exit(1);
+    }
+    const config = loadConfig();
+    const client = new MongoClient(config.uri);
+    try {
+      await client.connect();
+      const commitEngine = new CommitEngine(client, config);
+      await commitEngine.initialize();
+      const target = opts.commit ?? opts.branch;
+      const tag = await commitEngine.createTag(name, target, {
+        message: opts.message,
+        author: opts.author,
+        isBranch: !opts.commit && !!opts.branch,
+      });
+      console.log(chalk.green(`✅ Tag "${tag.name}" → ${tag.commitHash.slice(0, 12)}`));
+    } finally {
+      await client.close();
+    }
+  });
+
+tagCmd
+  .command("list")
+  .description("List all tags")
+  .action(async () => {
+    const config = loadConfig();
+    const client = new MongoClient(config.uri);
+    try {
+      await client.connect();
+      const commitEngine = new CommitEngine(client, config);
+      await commitEngine.initialize();
+      const tags = await commitEngine.listTags();
+      if (tags.length === 0) {
+        console.log(chalk.dim("No tags found"));
+        return;
+      }
+      console.log(chalk.bold(`Tags (${tags.length}):\n`));
+      for (const t of tags) {
+        console.log(
+          chalk.yellow(`  ${t.name}`),
+          chalk.dim(`→ ${t.commitHash.slice(0, 8)}`),
+          chalk.dim(`(${t.createdBy}, ${t.createdAt.toISOString()})`)
+        );
+        if (t.message) console.log(chalk.dim(`    ${t.message}`));
+      }
+    } finally {
+      await client.close();
+    }
+  });
+
+tagCmd
+  .command("delete <name>")
+  .description("Delete a tag (the commit is NOT affected)")
+  .action(async (name: string) => {
+    const config = loadConfig();
+    const client = new MongoClient(config.uri);
+    try {
+      await client.connect();
+      const commitEngine = new CommitEngine(client, config);
+      await commitEngine.initialize();
+      await commitEngine.deleteTag(name);
+      console.log(chalk.green(`✅ Tag "${name}" deleted`));
+    } finally {
+      await client.close();
+    }
+  });
+
+// ── Cherry-Pick Command (Wave 4) ────────────────────────────
+
+program
+  .command("cherry-pick <targetBranch> <commitHash>")
+  .description("Apply a single commit's changes to a target branch")
+  .option("--author <name>", "Author of the cherry-pick")
+  .action(async (targetBranch: string, commitHash: string, opts) => {
+    const config = loadConfig();
+    const client = new MongoClient(config.uri);
+    try {
+      await client.connect();
+      const ce = new CommitEngine(client, config);
+      await ce.initialize();
+      const result = await ce.cherryPick(targetBranch, commitHash, opts.author);
+      console.log(chalk.green(`✅ Cherry-pick successful`));
+      console.log(chalk.dim(`   Source: ${result.sourceCommitHash.slice(0, 12)}`));
+      console.log(chalk.dim(`   New commit: ${result.newCommitHash.slice(0, 12)}`));
+    } finally {
+      await client.close();
+    }
+  });
+
+// ── Revert Command (Wave 4) ─────────────────────────────────
+
+program
+  .command("revert <branch> <commitHash>")
+  .description("Undo a specific commit by creating an inverse commit")
+  .option("--author <name>", "Author of the revert")
+  .action(async (branch: string, commitHash: string, opts) => {
+    const config = loadConfig();
+    const client = new MongoClient(config.uri);
+    try {
+      await client.connect();
+      const ce = new CommitEngine(client, config);
+      await ce.initialize();
+      const result = await ce.revert(branch, commitHash, opts.author);
+      console.log(chalk.green(`✅ Revert successful`));
+      console.log(chalk.dim(`   Reverted: ${result.revertedCommitHash.slice(0, 12)}`));
+      console.log(chalk.dim(`   New commit: ${result.newCommitHash.slice(0, 12)}`));
     } finally {
       await client.close();
     }

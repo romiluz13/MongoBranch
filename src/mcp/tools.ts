@@ -13,6 +13,9 @@ import { HistoryManager } from "../core/history.ts";
 import { MergeQueue } from "../core/queue.ts";
 import { OperationLog } from "../core/oplog.ts";
 import { BranchProxy } from "../core/proxy.ts";
+import { CommitEngine } from "../core/commit.ts";
+import { ProtectionManager } from "../core/protection.ts";
+import { HookManager } from "../core/hooks.ts";
 import type { MongoBranchConfig } from "../core/types.ts";
 
 interface McpToolResult {
@@ -41,6 +44,9 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
   const mergeQueue = new MergeQueue(client, config);
   const oplog = new OperationLog(client, config);
   const proxy = new BranchProxy(client, config, branchManager, oplog);
+  const commitEngine = new CommitEngine(client, config);
+  const protectionManager = new ProtectionManager(client, config);
+  const hookManager = new HookManager(client, config);
 
   // Initialize all managers (create indexes)
   let initialized = false;
@@ -50,6 +56,9 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
       await historyManager.initialize();
       await mergeQueue.initialize();
       await oplog.initialize();
+      await commitEngine.initialize();
+      await protectionManager.initialize();
+      await hookManager.initialize();
       initialized = true;
     }
   }
@@ -662,6 +671,353 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         return errorResult(`Failed to undo: ${msg}`);
+      }
+    },
+
+    // ── Commit Tools (Wave 4) ───────────────────────────────
+
+    /**
+     * commit — Create an immutable, content-addressed commit on a branch.
+     */
+    async commit(args: {
+      branchName: string;
+      message: string;
+      author?: string;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const commit = await commitEngine.commit({
+          branchName: args.branchName,
+          message: args.message,
+          author: args.author,
+        });
+        return textResult(
+          `Commit created on "${args.branchName}"\n` +
+          `Hash: ${commit.hash}\n` +
+          `Parent(s): ${commit.parentHashes.length > 0 ? commit.parentHashes.join(", ") : "(root)"}\n` +
+          `Message: ${commit.message}\n` +
+          `Collections: ${Object.keys(commit.snapshot.collections).join(", ")}`
+        );
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to commit: ${msg}`);
+      }
+    },
+
+    /**
+     * get_commit — Retrieve a single commit by its hash.
+     */
+    async get_commit(args: { hash: string }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const commit = await commitEngine.getCommit(args.hash);
+        if (!commit) {
+          return errorResult(`Commit "${args.hash}" not found`);
+        }
+        return textResult(JSON.stringify(commit, null, 2));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to get commit: ${msg}`);
+      }
+    },
+
+    /**
+     * commit_log — Walk the commit history of a branch (most recent first).
+     */
+    async commit_log(args: {
+      branchName: string;
+      limit?: number;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const log = await commitEngine.getLog(args.branchName, args.limit);
+        if (log.commits.length === 0) {
+          return textResult(`No commits on branch "${args.branchName}"`);
+        }
+        const lines = log.commits.map((c, i) =>
+          `${i + 1}. [${c.hash.slice(0, 8)}] ${c.message} (${c.author}, ${c.timestamp.toISOString()})`
+        );
+        return textResult(
+          `Commit log for "${args.branchName}" (${log.commits.length} commits):\n` +
+          lines.join("\n")
+        );
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to get commit log: ${msg}`);
+      }
+    },
+
+    // ── Tag Tools (Wave 4) ──────────────────────────────────
+
+    /**
+     * create_tag — Create an immutable named reference to a commit.
+     */
+    async create_tag(args: {
+      name: string;
+      commitHash?: string;
+      branchName?: string;
+      message?: string;
+      author?: string;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        if (!args.commitHash && !args.branchName) {
+          return errorResult("Provide either commitHash or branchName to tag");
+        }
+        const target = args.commitHash ?? args.branchName!;
+        const tag = await commitEngine.createTag(args.name, target, {
+          message: args.message,
+          author: args.author,
+          isBranch: !args.commitHash && !!args.branchName,
+        });
+        return textResult(
+          `Tag "${tag.name}" created → commit ${tag.commitHash.slice(0, 12)}` +
+          (tag.message ? `\nMessage: ${tag.message}` : "")
+        );
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to create tag: ${msg}`);
+      }
+    },
+
+    /**
+     * list_tags — List all tags with their commit references.
+     */
+    async list_tags(): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const tags = await commitEngine.listTags();
+        if (tags.length === 0) {
+          return textResult("No tags found");
+        }
+        const lines = tags.map((t) =>
+          `  ${t.name} → ${t.commitHash.slice(0, 8)} (${t.createdBy}, ${t.createdAt.toISOString()})` +
+          (t.message ? ` — ${t.message}` : "")
+        );
+        return textResult(`Tags (${tags.length}):\n${lines.join("\n")}`);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to list tags: ${msg}`);
+      }
+    },
+
+    /**
+     * delete_tag — Remove a tag by name.
+     */
+    async delete_tag(args: { name: string }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        await commitEngine.deleteTag(args.name);
+        return textResult(`Tag "${args.name}" deleted`);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to delete tag: ${msg}`);
+      }
+    },
+
+    // ── Three-Way Merge Tools (Wave 4) ──────────────────────
+
+    /**
+     * merge_three_way — Git-like three-way merge using common ancestor.
+     * Auto-merges non-overlapping changes, detects per-field conflicts.
+     */
+    /**
+     * cherry_pick — Apply a single commit's changes to a target branch.
+     */
+    async cherry_pick(args: {
+      targetBranch: string;
+      commitHash: string;
+      author?: string;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const result = await commitEngine.cherryPick(
+          args.targetBranch, args.commitHash, args.author
+        );
+        return textResult(
+          `Cherry-pick successful!\n` +
+          `Source commit: ${result.sourceCommitHash.slice(0, 12)}\n` +
+          `New commit: ${result.newCommitHash.slice(0, 12)}\n` +
+          `Added: ${result.documentsAdded}, Removed: ${result.documentsRemoved}, Modified: ${result.documentsModified}`
+        );
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Cherry-pick failed: ${msg}`);
+      }
+    },
+
+    /**
+     * revert_commit — Undo a specific commit by creating an inverse commit.
+     */
+    async revert_commit(args: {
+      branchName: string;
+      commitHash: string;
+      author?: string;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const result = await commitEngine.revert(
+          args.branchName, args.commitHash, args.author
+        );
+        return textResult(
+          `Revert successful!\n` +
+          `Reverted commit: ${result.revertedCommitHash.slice(0, 12)}\n` +
+          `New commit: ${result.newCommitHash.slice(0, 12)}\n` +
+          `Documents reverted: ${result.documentsReverted}`
+        );
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Revert failed: ${msg}`);
+      }
+    },
+
+    // ── TTL & Reset Tools (Wave 5) ────────────────────────────
+
+    async set_branch_ttl(args: {
+      branchName: string;
+      ttlMinutes?: number;
+      remove?: boolean;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        if (args.remove) {
+          await branchManager.setBranchExpiration(args.branchName, null);
+          return textResult(`TTL removed from "${args.branchName}"`);
+        }
+        const minutes = args.ttlMinutes ?? 60;
+        const newExpiry = await branchManager.extendBranch(args.branchName, minutes);
+        return textResult(
+          `TTL set on "${args.branchName}" — expires at ${newExpiry.toISOString()} (${minutes} minutes)`
+        );
+      } catch (err: unknown) {
+        return errorResult(`Failed to set TTL: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    async reset_from_parent(args: { branchName: string }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const branch = await branchManager.resetFromParent(args.branchName);
+        return textResult(
+          `Branch "${args.branchName}" reset from parent.\n` +
+          `Collections refreshed: ${branch.collections.join(", ")}`
+        );
+      } catch (err: unknown) {
+        return errorResult(`Failed to reset: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    async merge_three_way(args: {
+      sourceBranch: string;
+      targetBranch: string;
+      dryRun?: boolean;
+      conflictStrategy?: string;
+      author?: string;
+      message?: string;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const result = await mergeEngine.threeWayMerge(
+          args.sourceBranch, args.targetBranch, commitEngine,
+          {
+            dryRun: args.dryRun,
+            conflictStrategy: (args.conflictStrategy as any) ?? "manual",
+            author: args.author,
+            message: args.message,
+          }
+        );
+
+        if (!result.success && result.conflicts.length > 0) {
+          const conflictLines = result.conflicts.map((c) =>
+            `  ⚠️ ${c.collection}.${c.documentId} → field "${c.field}": ours=${JSON.stringify(c.ours)}, theirs=${JSON.stringify(c.theirs)}`
+          );
+          return textResult(
+            `Three-way merge BLOCKED — ${result.conflicts.length} conflict(s):\n` +
+            conflictLines.join("\n") + "\n\n" +
+            `Re-run with conflictStrategy="theirs" or "ours" to auto-resolve.`
+          );
+        }
+
+        return textResult(
+          `Three-way merge ${result.dryRun ? "(DRY RUN) " : ""}successful!\n` +
+          `Source: "${result.sourceBranch}" → Target: "${result.targetBranch}"\n` +
+          `Merge base: ${result.mergeBase?.slice(0, 8) ?? "none"}\n` +
+          `Added: ${result.documentsAdded}, Removed: ${result.documentsRemoved}, Modified: ${result.documentsModified}\n` +
+          (result.mergeCommitHash ? `Merge commit: ${result.mergeCommitHash.slice(0, 12)}` : "")
+        );
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Three-way merge failed: ${msg}`);
+      }
+    },
+
+    // ── Protection Tools (Wave 5) ───────────────────────────
+
+    async protect_branch(args: {
+      pattern: string;
+      requireMergeOnly?: boolean;
+      preventDelete?: boolean;
+      createdBy?: string;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const rule = await protectionManager.protectBranch(args.pattern, args);
+        return textResult(
+          `Protection rule created: "${rule.pattern}"\n` +
+          `Merge only: ${rule.requireMergeOnly}, Prevent delete: ${rule.preventDelete}`
+        );
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    async list_protections(): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const rules = await protectionManager.listProtections();
+        if (rules.length === 0) return textResult("No protection rules");
+        const lines = rules.map(r =>
+          `  ${r.pattern} — mergeOnly:${r.requireMergeOnly} noDelete:${r.preventDelete} (${r.createdBy})`
+        );
+        return textResult(`Protection rules (${rules.length}):\n${lines.join("\n")}`);
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    async remove_protection(args: { pattern: string }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        await protectionManager.removeProtection(args.pattern);
+        return textResult(`Protection removed for "${args.pattern}"`);
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    // ── Hook Tools (Wave 5) ─────────────────────────────────
+
+    async list_hooks(args: { event?: string }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const hooks = await hookManager.listHooks(args.event as any);
+        if (hooks.length === 0) return textResult("No hooks registered");
+        const lines = hooks.map(h =>
+          `  [${h.priority}] ${h.name} → ${h.event} (${h.createdBy})`
+        );
+        return textResult(`Hooks (${hooks.length}):\n${lines.join("\n")}`);
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    async remove_hook(args: { name: string }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        await hookManager.removeHook(args.name);
+        return textResult(`Hook "${args.name}" removed`);
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
   };

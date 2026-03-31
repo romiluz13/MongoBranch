@@ -15,6 +15,8 @@ export interface BranchMetadata {
   readOnly?: boolean;
   lazy?: boolean;
   materializedCollections?: string[];
+  headCommit?: string;  // SHA-256 hash of the latest commit on this branch
+  expiresAt?: Date;     // TTL — branch auto-expires after this time
 }
 
 export type BranchStatus = "active" | "merged" | "deleted" | "creating" | "error";
@@ -26,6 +28,7 @@ export interface BranchCreateOptions {
   createdBy?: string;
   readOnly?: boolean;
   lazy?: boolean;
+  ttlMinutes?: number;  // Branch auto-expires after N minutes
 }
 
 export interface BranchListOptions {
@@ -148,6 +151,113 @@ export interface MergeConflict {
   reason: string;
 }
 
+// ── Three-Way Merge Types ────────────────────────────────────
+
+export interface ThreeWayMergeResult {
+  sourceBranch: string;
+  targetBranch: string;
+  mergeBase: string | null;           // Commit hash of common ancestor
+  collectionsAffected: number;
+  documentsAdded: number;
+  documentsRemoved: number;
+  documentsModified: number;
+  conflicts: ThreeWayConflict[];
+  mergeCommitHash?: string;
+  success: boolean;
+  dryRun?: boolean;
+}
+
+export interface ThreeWayConflict {
+  collection: string;
+  documentId: unknown;
+  field: string;
+  base: unknown;                      // Value in common ancestor
+  ours: unknown;                      // Value in target (merge-into) branch
+  theirs: unknown;                    // Value in source (merge-from) branch
+  resolved?: boolean;
+  resolvedValue?: unknown;
+}
+
+export interface ThreeWayMergeOptions {
+  dryRun?: boolean;
+  conflictStrategy?: ConflictStrategy;
+  author?: string;
+  message?: string;
+}
+
+// ── Branch Protection Types ──────────────────────────────────
+
+export const PROTECTIONS_COLLECTION = "protections";
+
+export interface BranchProtection {
+  _id?: ObjectId;
+  pattern: string;     // Branch name or glob pattern (e.g., "main", "prod-*")
+  requireMergeOnly: boolean;  // Prevent direct writes, only merges allowed
+  preventDelete: boolean;
+  createdBy: string;
+  createdAt: Date;
+}
+
+// ── Hook Types ──────────────────────────────────────────────
+
+export const HOOKS_COLLECTION = "hooks";
+
+export type HookEventType =
+  | "pre-commit" | "post-commit"
+  | "pre-merge" | "post-merge"
+  | "pre-create-branch" | "post-create-branch"
+  | "pre-delete-branch" | "post-delete-branch"
+  | "pre-create-tag" | "post-create-tag"
+  | "pre-delete-tag" | "post-delete-tag"
+  | "pre-revert" | "pre-cherry-pick";
+
+export interface HookRegistration {
+  _id?: ObjectId;
+  name: string;
+  event: HookEventType;
+  priority: number;
+  handler: string;  // Serialized handler ID or webhook URL
+  isWebhook: boolean;
+  createdBy: string;
+  createdAt: Date;
+}
+
+export interface HookContext {
+  event: HookEventType;
+  branchName: string;
+  user: string;
+  runId: string;
+  commitHash?: string;
+  tagName?: string;
+  sourceBranch?: string;
+  targetBranch?: string;
+}
+
+export interface HookResult {
+  allow: boolean;
+  reason?: string;
+}
+
+// ── Cherry-Pick & Revert Types ───────────────────────────────
+
+export interface CherryPickResult {
+  sourceCommitHash: string;
+  targetBranch: string;
+  newCommitHash: string;
+  documentsAdded: number;
+  documentsRemoved: number;
+  documentsModified: number;
+  success: boolean;
+}
+
+export interface RevertResult {
+  revertedCommitHash: string;
+  branchName: string;
+  newCommitHash: string;
+  documentsReverted: number;
+  success: boolean;
+}
+
 // ── Agent Types ──────────────────────────────────────────────
 
 export interface AgentMetadata {
@@ -219,6 +329,52 @@ export interface Snapshot {
 export interface BranchLog {
   branchName: string;
   entries: Snapshot[];
+}
+
+// ── Commit Types ─────────────────────────────────────────
+
+export const COMMITS_COLLECTION = "commits";
+export const TAGS_COLLECTION = "tags";
+
+export interface Tag {
+  _id?: ObjectId;
+  name: string;
+  commitHash: string;
+  message?: string;
+  createdBy: string;
+  createdAt: Date;
+}
+
+export interface Commit {
+  _id?: ObjectId;
+  hash: string;
+  branchName: string;
+  parentHashes: string[];   // Single parent for normal commits, two for merge commits
+  message: string;
+  author: string;
+  timestamp: Date;
+  snapshot: CommitSnapshot;
+}
+
+export interface CommitSnapshot {
+  collections: Record<string, CollectionSnapshot>;
+}
+
+export interface CollectionSnapshot {
+  documentCount: number;
+  checksum: string;   // SHA-256 of sorted document IDs for fast comparison
+}
+
+export interface CommitOptions {
+  branchName: string;
+  message: string;
+  author?: string;
+  parentOverrides?: string[];  // For merge commits with two parents
+}
+
+export interface CommitLog {
+  branchName: string;
+  commits: Commit[];
 }
 
 // ── Operation Log Types ───────────────────────────────────

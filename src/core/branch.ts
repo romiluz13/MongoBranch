@@ -86,10 +86,20 @@ export class BranchManager {
       description,
       ...(options.readOnly ? { readOnly: true } : {}),
       ...(isLazy ? { lazy: true, materializedCollections: [] } : {}),
+      ...(options.ttlMinutes ? { expiresAt: new Date(now.getTime() + options.ttlMinutes * 60_000) } : {}),
     };
 
     await this.metaDb.collection(META_COLLECTION).insertOne({ ...metadata });
     return metadata;
+  }
+
+  /**
+   * Get a single branch by name.
+   */
+  async getBranch(name: string): Promise<BranchMetadata | null> {
+    return this.metaDb
+      .collection<BranchMetadata>(META_COLLECTION)
+      .findOne({ name, status: { $ne: "deleted" } });
   }
 
   async listBranches(options?: BranchListOptions): Promise<BranchMetadata[]> {
@@ -107,6 +117,76 @@ export class BranchManager {
       .find(filter)
       .sort({ createdAt: -1 })
       .toArray();
+  }
+
+  /**
+   * Extend a branch's TTL by N minutes from now.
+   */
+  async extendBranch(name: string, additionalMinutes: number): Promise<Date> {
+    const branch = await this.getBranch(name);
+    if (!branch) throw new Error(`Branch "${name}" not found`);
+
+    const newExpiry = new Date(Date.now() + additionalMinutes * 60_000);
+    await this.metaDb.collection(META_COLLECTION).updateOne(
+      { name, status: { $ne: "deleted" } },
+      { $set: { expiresAt: newExpiry, updatedAt: new Date() } }
+    );
+    return newExpiry;
+  }
+
+  /**
+   * Set or remove expiration on a branch.
+   */
+  async setBranchExpiration(name: string, expiresAt: Date | null): Promise<void> {
+    const branch = await this.getBranch(name);
+    if (!branch) throw new Error(`Branch "${name}" not found`);
+
+    if (expiresAt === null) {
+      await this.metaDb.collection(META_COLLECTION).updateOne(
+        { name, status: { $ne: "deleted" } },
+        { $unset: { expiresAt: "" }, $set: { updatedAt: new Date() } }
+      );
+    } else {
+      await this.metaDb.collection(META_COLLECTION).updateOne(
+        { name, status: { $ne: "deleted" } },
+        { $set: { expiresAt, updatedAt: new Date() } }
+      );
+    }
+  }
+
+  /**
+   * Reset branch from parent — drop all data, re-copy from source.
+   */
+  async resetFromParent(name: string): Promise<BranchMetadata> {
+    const branch = await this.getBranch(name);
+    if (!branch) throw new Error(`Branch "${name}" not found`);
+
+    const sourceDb = this.resolveDatabase(branch.parentBranch);
+    const branchDb = this.client.db(branch.branchDatabase);
+
+    // Drop all existing collections in the branch
+    const existingCols = await branchDb.listCollections().toArray();
+    for (const col of existingCols) {
+      if (!col.name.startsWith("system.")) {
+        await branchDb.collection(col.name).drop().catch(() => {});
+      }
+    }
+
+    // Re-copy from source
+    const collectionInfos = await sourceDb.listCollections().toArray();
+    const collections = collectionInfos
+      .filter((c) => !c.name.startsWith("system."))
+      .map((c) => c.name);
+
+    await this.copyCollections(sourceDb, branchDb, collections);
+
+    // Update metadata
+    await this.metaDb.collection(META_COLLECTION).updateOne(
+      { name, status: { $ne: "deleted" } },
+      { $set: { collections, updatedAt: new Date() } }
+    );
+
+    return (await this.getBranch(name))!;
   }
 
   async switchBranch(name: string): Promise<BranchSwitchResult> {

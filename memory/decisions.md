@@ -56,3 +56,81 @@
 - **Why 27018**: Avoids port conflicts with existing MongoDB instances
 - **Fallback**: Tests auto-detect Docker → fall back to mongodb-memory-server
 - **Status**: ✅ Accepted — implemented in `docker-compose.yml` and `tests/setup.ts`
+
+
+## ADR-008: Commit Graph Architecture
+- **Date**: 2026-03-31
+- **Decision**: Add a commit graph layer on top of existing oplog/history
+- **Context**: Neon has no merge/diff. Dolt has full Git-style commit graph with three-way merge.
+  MongoBranch needs commits to enable: tags, cherry-pick, revert, time travel, blame.
+- **Design**: Content-addressed SHA-256 hashes, parent chain, merge commits with two parents
+- **Stored in**: `__mongobranch.commits` collection with unique hash index
+- **Impact**: Commits become the backbone for all advanced features
+- **Status**: ⬜ Planned — Wave 4, Phase 4.1
+
+## ADR-009: Three-Way Merge Algorithm
+- **Date**: 2026-03-31
+- **Decision**: Implement three-way merge using common ancestor from commit graph
+- **Context**: Current merge is 2-way (source vs target) — misses concurrent changes.
+  Dolt's three-way merge: find merge base → diff base→ours + diff base→theirs → auto-merge non-overlapping → conflict on same doc+field with different values.
+- **For MongoDB**: Primary key = `_id`, per-field conflict granularity, structured conflict table
+- **Conflict resolution**: `ours`, `theirs`, `custom` (provide specific value)
+- **Impact**: This is the #1 feature Neon lacks — makes MongoBranch a true VCS
+- **Status**: ⬜ Planned — Wave 4, Phase 4.3
+
+## ADR-010: Branch TTL via MongoDB TTL Indexes
+- **Date**: 2026-03-31
+- **Decision**: Use MongoDB native TTL indexes for automatic branch expiration
+- **Context**: Agents leave orphan branches. Neon has branch TTL. lakeFS has garbage collection.
+  MongoDB TTL indexes auto-delete documents when `expiresAt` passes — zero application-side cron.
+- **Gotcha**: TTL index only deletes the metadata doc. Need a poller/hook to also drop the branch DB.
+- **Status**: ⬜ Planned — Wave 5, Phase 5.1
+
+## ADR-011: Hook System Design (Updated after lakeFS validation)
+- **Date**: 2026-03-31 (validated 2026-03-31)
+- **Decision**: Synchronous pre-hooks (can reject), fire-and-forget post-hooks, 14 event types
+- **Context**: lakeFS source code (`pkg/graveler/hooks_handler.go`) validates this exact pattern:
+  - Pre-hooks return error (can reject operation) — fail-fast execution
+  - Post-hooks return void (notification only, cannot reject)
+  - lakeFS has 18 event types across 9 operations (we adopt 14 for our scope)
+- **Events (14)**: pre/post-commit, pre/post-merge, pre/post-create-branch, pre/post-delete-branch,
+  pre/post-create-tag, pre/post-delete-tag, pre-revert, pre-cherry-pick
+- **Execution**: Ordered by priority, first rejection stops the chain
+- **Hook context**: runId, eventType, branchName, user, diff summary, commit info
+- **Webhook support**: HTTP POST to external URLs (async, fire-and-forget for post-events)
+- **Status**: ⬜ Planned — Wave 5, Phase 5.4
+
+## ADR-013: Three-Way Merge — 6-Step Process (Validated from Dolt)
+- **Date**: 2026-03-31
+- **Decision**: Implement 6-step three-way merge adapted from Dolt's SQL approach to MongoDB documents
+- **Source**: dolthub.com/blog/2024-06-19-threeway-merge (Tim Sehn, 23 min deep dive)
+- **Steps**:
+  1. Find merge base (BFS common ancestor from commit graph)
+  2. Schema merge (collection-level: added/removed collections)
+  3. Schema conflict resolution (if both sides modify same collection structure)
+  4. Data merge (document-level: walk sorted `_id` sets from base→ours and base→theirs)
+  5. Data conflict resolution (same `_id` + same field + different values = conflict)
+  6. Constraint validation (check indexes, validation rules post-merge)
+- **Key insight from Dolt**: JSON columns auto-merge if different keys modified — directly maps to MongoDB embedded documents
+- **MongoDB adaptation**: No Prolly Trees needed — use oplog diffs + snapshot comparison
+- **Conflict granularity**: Per-field within a document (not per-document)
+- **Status**: ⬜ Planned — Wave 4, Phase 4.3
+
+## ADR-014: PII Anonymization Strategy (Validated from Neon)
+- **Date**: 2026-03-31
+- **Decision**: Static masking at branch creation time, with path to dynamic masking
+- **Source**: neon.com/blog/branching-environments-anonymized-pii (Nov 2025)
+- **V1 (Static)**: Masking runs once at branch creation. Parent data untouched. Branch-specific rules.
+- **Strategies**: hash (SHA-256), mask (***), faker (realistic fake), null, custom function
+- **V2 (Dynamic, future)**: Query-time masking, no storage delta, zero additional cost
+- **MongoDB adaptation**: Use aggregation pipeline with $addFields for dynamic, $merge for static
+- **Status**: ⬜ Planned — Wave 7, Phase 7.4
+
+## ADR-012: Competitive Positioning
+- **Date**: 2026-03-31
+- **Decision**: Position MongoBranch as "the missing piece for MongoDB" — what Neon did for Postgres, but with merge
+- **Neon gaps**: No merge, no diff, no conflict detection, branches are disposable dead-ends
+- **Dolt gap**: Only works with MySQL/SQL, not MongoDB/documents
+- **MongoBranch advantage**: Full Git workflow (branch→commit→diff→merge) + MongoDB's native JSON/vector/hybrid search
+- **Tagline**: "Neon gave Postgres branching. We gave MongoDB version control."
+- **Status**: ✅ Accepted

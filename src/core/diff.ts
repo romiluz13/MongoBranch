@@ -18,9 +18,20 @@ import {
   type ValidationRule,
   type BranchMetadata,
   type MongoBranchConfig,
+  type ThreeWayConflict,
   MAIN_BRANCH,
   META_COLLECTION,
 } from "./types.ts";
+
+export interface Diff3Result {
+  /** Non-conflicting changes to apply */
+  additions: Array<{ collection: string; doc: Record<string, unknown> }>;
+  deletions: Array<{ collection: string; docId: unknown }>;
+  modifications: Array<{ collection: string; docId: unknown; mergedFields: Record<string, unknown> }>;
+  /** Field-level conflicts requiring resolution */
+  conflicts: ThreeWayConflict[];
+  collectionsAffected: Set<string>;
+}
 
 export class DiffEngine {
   private client: MongoClient;
@@ -262,6 +273,169 @@ export class DiffEngine {
 
     const changed = JSON.stringify(source) !== JSON.stringify(target);
     return { source, target, changed };
+  }
+
+  /**
+   * Three-way diff: Compare base → ours and base → theirs.
+   * Identifies non-conflicting changes and per-field conflicts.
+   */
+  async diff3(
+    baseDbName: string,
+    oursDbName: string,
+    theirsDbName: string
+  ): Promise<Diff3Result> {
+    const baseDb = this.client.db(baseDbName);
+    const oursDb = this.client.db(oursDbName);
+    const theirsDb = this.client.db(theirsDbName);
+
+    const result: Diff3Result = {
+      additions: [],
+      deletions: [],
+      modifications: [],
+      conflicts: [],
+      collectionsAffected: new Set(),
+    };
+
+    // Get all user collections across all three DBs
+    const baseCols = await this.getUserCollections(baseDb);
+    const oursCols = await this.getUserCollections(oursDb);
+    const theirsCols = await this.getUserCollections(theirsDb);
+    const allCols = new Set([...baseCols, ...oursCols, ...theirsCols]);
+
+    for (const colName of allCols) {
+      const baseColl = baseDb.collection(colName);
+      const oursColl = oursDb.collection(colName);
+      const theirsColl = theirsDb.collection(colName);
+
+      // Build doc maps for each version
+      const baseDocs = await this.buildDocMap(baseColl);
+      const oursDocs = await this.buildDocMap(oursColl);
+      const theirsDocs = await this.buildDocMap(theirsColl);
+
+      const allIds = new Set([...baseDocs.keys(), ...oursDocs.keys(), ...theirsDocs.keys()]);
+
+      for (const id of allIds) {
+        const baseDoc = baseDocs.get(id);
+        const oursDoc = oursDocs.get(id);
+        const theirsDoc = theirsDocs.get(id);
+        // Use original _id from any available doc (for correct MongoDB queries)
+        const originalId = (baseDoc ?? oursDoc ?? theirsDoc)?._id;
+
+        // Case 1: Only "theirs" added (not in base, not in ours)
+        if (!baseDoc && !oursDoc && theirsDoc) {
+          result.additions.push({ collection: colName, doc: theirsDoc });
+          result.collectionsAffected.add(colName);
+          continue;
+        }
+
+        // Case 2: Only "ours" added — already in target, skip
+        if (!baseDoc && oursDoc && !theirsDoc) continue;
+
+        // Case 3: Both added the same doc — check for conflicts
+        if (!baseDoc && oursDoc && theirsDoc) {
+          this.mergeDocFields(colName, originalId, {}, oursDoc, theirsDoc, result);
+          continue;
+        }
+
+        // Case 4: Theirs deleted (was in base but not in theirs)
+        if (baseDoc && oursDoc && !theirsDoc) {
+          if (JSON.stringify(baseDoc) !== JSON.stringify(oursDoc)) {
+            result.conflicts.push({
+              collection: colName, documentId: originalId, field: "_deleted",
+              base: baseDoc, ours: oursDoc, theirs: null,
+            });
+          } else {
+            result.deletions.push({ collection: colName, docId: originalId });
+          }
+          result.collectionsAffected.add(colName);
+          continue;
+        }
+
+        // Case 5: Ours deleted — already absent from target, skip
+        if (baseDoc && !oursDoc && theirsDoc) {
+          if (JSON.stringify(baseDoc) !== JSON.stringify(theirsDoc)) {
+            result.conflicts.push({
+              collection: colName, documentId: originalId, field: "_deleted",
+              base: baseDoc, ours: null, theirs: theirsDoc,
+            });
+          }
+          continue;
+        }
+
+        // Case 6: Both have it — check for modifications
+        if (baseDoc && oursDoc && theirsDoc) {
+          this.mergeDocFields(colName, originalId, baseDoc, oursDoc, theirsDoc, result);
+          continue;
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Compare fields of a document across base/ours/theirs.
+   * Auto-merges non-overlapping changes. Flags conflicts on same-field different-value.
+   */
+  private mergeDocFields(
+    collection: string,
+    docId: unknown,
+    base: Record<string, unknown>,
+    ours: Record<string, unknown>,
+    theirs: Record<string, unknown>,
+    result: Diff3Result
+  ): void {
+    const allFields = new Set([
+      ...Object.keys(base),
+      ...Object.keys(ours),
+      ...Object.keys(theirs),
+    ]);
+
+    const mergedFields: Record<string, unknown> = {};
+    let hasChanges = false;
+    let hasConflicts = false;
+
+    for (const field of allFields) {
+      if (field === "_id") continue;
+
+      const bVal = JSON.stringify(base[field]);
+      const oVal = JSON.stringify(ours[field]);
+      const tVal = JSON.stringify(theirs[field]);
+
+      if (bVal === oVal && bVal === tVal) continue; // No change
+      if (bVal === oVal && bVal !== tVal) {
+        // Only theirs changed — take theirs
+        mergedFields[field] = theirs[field];
+        hasChanges = true;
+      } else if (bVal !== oVal && bVal === tVal) {
+        // Only ours changed — already in target, skip
+        continue;
+      } else if (oVal === tVal) {
+        // Both changed to same value — no conflict
+        continue;
+      } else {
+        // Both changed to different values — CONFLICT
+        result.conflicts.push({
+          collection, documentId: docId, field,
+          base: base[field], ours: ours[field], theirs: theirs[field],
+        });
+        hasConflicts = true;
+      }
+    }
+
+    if (hasChanges && !hasConflicts) {
+      result.modifications.push({ collection, docId, mergedFields });
+      result.collectionsAffected.add(collection);
+    }
+  }
+
+  private async buildDocMap(coll: { find: Function }): Promise<Map<string, Record<string, unknown>>> {
+    const docs = await coll.find({}).toArray();
+    const map = new Map<string, Record<string, unknown>>();
+    for (const doc of docs) {
+      map.set(doc._id.toString(), doc as Record<string, unknown>);
+    }
+    return map;
   }
 
   private async getBranchMeta(branchName: string): Promise<BranchMetadata | null> {
