@@ -377,6 +377,77 @@ export interface CommitLog {
   commits: Commit[];
 }
 
+// ── Time Travel Types ─────────────────────────────────────
+
+export const COMMIT_DATA_COLLECTION = "commit_data";
+
+export interface CommitData {
+  _id?: ObjectId;
+  commitHash: string;
+  collection: string;
+  documents: Record<string, unknown>[];
+  documentCount: number;
+  storedAt: Date;
+}
+
+export interface TimeTravelQuery {
+  branchName: string;
+  collection: string;
+  filter?: Record<string, unknown>;
+  at: string;  // commitHash or ISO timestamp
+}
+
+export interface TimeTravelResult {
+  branchName: string;
+  collection: string;
+  commitHash: string;
+  commitMessage: string;
+  commitTimestamp: Date;
+  documents: Record<string, unknown>[];
+  documentCount: number;
+}
+
+// ── Blame Types ───────────────────────────────────────────
+
+export interface BlameEntry {
+  field: string;
+  value: unknown;
+  commitHash: string;
+  author: string;
+  timestamp: Date;
+  message: string;
+}
+
+export interface BlameResult {
+  branchName: string;
+  collection: string;
+  documentId: string;
+  fields: Record<string, BlameEntry[]>;
+  totalCommitsScanned: number;
+}
+
+// ── Deploy Request Types ──────────────────────────────────
+
+export const DEPLOY_REQUESTS_COLLECTION = "deploy_requests";
+
+export type DeployRequestStatus = "open" | "approved" | "rejected" | "merged";
+
+export interface DeployRequest {
+  _id?: ObjectId;
+  id: string;  // Short unique ID
+  sourceBranch: string;
+  targetBranch: string;
+  description: string;
+  status: DeployRequestStatus;
+  diff?: Record<string, unknown>;
+  createdBy: string;
+  reviewedBy?: string;
+  rejectionReason?: string;
+  mergedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 // ── Operation Log Types ───────────────────────────────────
 
 export const OPLOG_COLLECTION = "oplog";

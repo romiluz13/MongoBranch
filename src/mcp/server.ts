@@ -445,6 +445,71 @@ async function main(): Promise<void> {
     inputSchema: { name: z.string().describe("Hook name to remove") },
   }, async (args) => tools.remove_hook(args));
 
+  // ── Tool: time_travel_query (Wave 6) ─────────────────────────
+  mcpServer.registerTool("time_travel_query", {
+    description: "Query data at a specific point in time (commit hash or timestamp). Like Dolt's AS OF or Neon's Time Travel.",
+    inputSchema: {
+      branchName: z.string().describe("Branch to query"),
+      collection: z.string().describe("Collection name"),
+      commitHash: z.string().optional().describe("Specific commit hash"),
+      timestamp: z.string().optional().describe("ISO timestamp (RFC 3339)"),
+      filter: z.record(z.unknown()).optional().describe("MongoDB query filter"),
+    },
+  }, async (args) => tools.time_travel_query(args));
+
+  // ── Tool: blame (Wave 6) ─────────────────────────────────────
+  mcpServer.registerTool("blame", {
+    description: "Field-level blame — trace which commit changed each field of a document. Like git blame for data.",
+    inputSchema: {
+      branchName: z.string().describe("Branch to blame on"),
+      collection: z.string().describe("Collection name"),
+      documentId: z.string().describe("Document _id to blame"),
+    },
+  }, async (args) => tools.blame(args));
+
+  // ── Tool: open_deploy_request (Wave 6) ───────────────────────
+  mcpServer.registerTool("open_deploy_request", {
+    description: "Open a deploy request (like a PR for data). Proposes merging source branch into target.",
+    inputSchema: {
+      sourceBranch: z.string().describe("Branch with changes"),
+      targetBranch: z.string().describe("Branch to merge into"),
+      description: z.string().describe("What this deploy request does"),
+      createdBy: z.string().describe("Who opened this request"),
+    },
+  }, async (args) => tools.open_deploy_request(args));
+
+  mcpServer.registerTool("approve_deploy_request", {
+    description: "Approve a deploy request — marks it ready for execution.",
+    inputSchema: {
+      id: z.string().describe("Deploy request ID"),
+      reviewedBy: z.string().describe("Who approved"),
+    },
+  }, async (args) => tools.approve_deploy_request(args));
+
+  mcpServer.registerTool("reject_deploy_request", {
+    description: "Reject a deploy request with a reason.",
+    inputSchema: {
+      id: z.string().describe("Deploy request ID"),
+      reviewedBy: z.string().describe("Who rejected"),
+      reason: z.string().describe("Rejection reason"),
+    },
+  }, async (args) => tools.reject_deploy_request(args));
+
+  mcpServer.registerTool("execute_deploy_request", {
+    description: "Execute an approved deploy request — performs the merge.",
+    inputSchema: {
+      id: z.string().describe("Deploy request ID"),
+    },
+  }, async (args) => tools.execute_deploy_request(args));
+
+  mcpServer.registerTool("list_deploy_requests", {
+    description: "List deploy requests, optionally filtered by status or target branch.",
+    inputSchema: {
+      status: z.string().optional().describe("Filter: open, approved, rejected, merged"),
+      targetBranch: z.string().optional().describe("Filter by target branch"),
+    },
+  }, async (args) => tools.list_deploy_requests(args));
+
   // ── Start stdio transport ───────────────────────────────────
   const transport = new StdioServerTransport();
   await mcpServer.connect(transport);

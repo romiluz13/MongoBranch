@@ -16,6 +16,8 @@ import { BranchProxy } from "../core/proxy.ts";
 import { CommitEngine } from "../core/commit.ts";
 import { ProtectionManager } from "../core/protection.ts";
 import { HookManager } from "../core/hooks.ts";
+import { TimeTravelEngine } from "../core/timetravel.ts";
+import { DeployRequestManager } from "../core/deploy.ts";
 import type { MongoBranchConfig } from "../core/types.ts";
 
 interface McpToolResult {
@@ -47,6 +49,8 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
   const commitEngine = new CommitEngine(client, config);
   const protectionManager = new ProtectionManager(client, config);
   const hookManager = new HookManager(client, config);
+  const timeTravelEngine = new TimeTravelEngine(client, config);
+  const deployRequestManager = new DeployRequestManager(client, config);
 
   // Initialize all managers (create indexes)
   let initialized = false;
@@ -59,6 +63,8 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
       await commitEngine.initialize();
       await protectionManager.initialize();
       await hookManager.initialize();
+      await timeTravelEngine.initialize();
+      await deployRequestManager.initialize();
       initialized = true;
     }
   }
@@ -1016,6 +1022,127 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
         await ensureInit();
         await hookManager.removeHook(args.name);
         return textResult(`Hook "${args.name}" removed`);
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    // ── Time Travel Tools (Wave 6) ──────────────────────────
+
+    async time_travel_query(args: {
+      branchName: string;
+      collection: string;
+      commitHash?: string;
+      timestamp?: string;
+      filter?: Record<string, unknown>;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const docs = await timeTravelEngine.findAt({
+          branchName: args.branchName,
+          collection: args.collection,
+          commitHash: args.commitHash,
+          timestamp: args.timestamp ? new Date(args.timestamp) : undefined,
+          filter: args.filter,
+        });
+        return textResult(JSON.stringify({ count: docs.length, documents: docs }, null, 2));
+      } catch (err: unknown) {
+        return errorResult(`Time travel failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    async blame(args: {
+      branchName: string;
+      collection: string;
+      documentId: string;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const result = await timeTravelEngine.blame(args.branchName, args.collection, args.documentId);
+        const lines = Object.entries(result.fields).map(([field, info]) =>
+          `  ${field}: commit ${info.commitHash.slice(0, 8)} by ${info.author} — "${info.message}"`
+        );
+        return textResult(`Blame for ${args.collection}/${args.documentId}:\n${lines.join("\n")}`);
+      } catch (err: unknown) {
+        return errorResult(`Blame failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    // ── Deploy Request Tools (Wave 6) ────────────────────────
+
+    async open_deploy_request(args: {
+      sourceBranch: string;
+      targetBranch: string;
+      description: string;
+      createdBy: string;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const dr = await deployRequestManager.open(args);
+        return textResult(
+          `Deploy request #${dr.id} opened.\n` +
+          `${dr.sourceBranch} → ${dr.targetBranch}\n` +
+          `Status: ${dr.status}\n` +
+          `Description: ${dr.description}`
+        );
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    async approve_deploy_request(args: { id: string; reviewedBy: string }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const dr = await deployRequestManager.approve(args.id, args.reviewedBy);
+        return textResult(`Deploy request #${dr.id} approved by ${dr.reviewedBy}`);
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    async reject_deploy_request(args: {
+      id: string;
+      reviewedBy: string;
+      reason: string;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const dr = await deployRequestManager.reject(args.id, args.reviewedBy, args.reason);
+        return textResult(`Deploy request #${dr.id} rejected: ${dr.rejectionReason}`);
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    async execute_deploy_request(args: { id: string }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const { deployRequest, mergeResult } = await deployRequestManager.execute(args.id);
+        return textResult(
+          `Deploy request #${deployRequest.id} executed!\n` +
+          `Merged: ${mergeResult.sourceBranch} → ${mergeResult.targetBranch}\n` +
+          `Added: ${mergeResult.documentsAdded}, Removed: ${mergeResult.documentsRemoved}, Modified: ${mergeResult.documentsModified}`
+        );
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    async list_deploy_requests(args: {
+      status?: string;
+      targetBranch?: string;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const drs = await deployRequestManager.list({
+          status: args.status as any,
+          targetBranch: args.targetBranch,
+        });
+        if (drs.length === 0) return textResult("No deploy requests found");
+        const lines = drs.map(dr =>
+          `  #${dr.id} [${dr.status}] ${dr.sourceBranch} → ${dr.targetBranch} — ${dr.description} (${dr.createdBy})`
+        );
+        return textResult(`Deploy requests (${drs.length}):\n${lines.join("\n")}`);
       } catch (err: unknown) {
         return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
       }

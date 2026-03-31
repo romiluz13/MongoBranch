@@ -39,6 +39,7 @@ beforeEach(async () => {
   await cleanupBranches(client);
   await client.db("__mongobranch").collection("commits").deleteMany({});
   await client.db("__mongobranch").collection("tags").deleteMany({});
+  await client.db("__mongobranch").collection("commit_data").deleteMany({});
 
   config = {
     uri,

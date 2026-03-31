@@ -21,7 +21,8 @@ import type {
   CherryPickResult,
   RevertResult,
 } from "./types.ts";
-import { COMMITS_COLLECTION, TAGS_COLLECTION, META_COLLECTION, MAIN_BRANCH } from "./types.ts";
+import { COMMITS_COLLECTION, TAGS_COLLECTION, META_COLLECTION, MAIN_BRANCH, COMMIT_DATA_COLLECTION } from "./types.ts";
+import type { CommitData } from "./types.ts";
 
 export class CommitEngine {
   private client: MongoClient;
@@ -29,6 +30,7 @@ export class CommitEngine {
   private commits: Collection<Commit>;
   private branches: Collection<BranchMetadata>;
   private tags: Collection<Tag>;
+  private commitData: Collection<CommitData>;
 
   constructor(client: MongoClient, config: MongoBranchConfig) {
     this.client = client;
@@ -37,12 +39,14 @@ export class CommitEngine {
     this.commits = metaDb.collection<Commit>(COMMITS_COLLECTION);
     this.branches = metaDb.collection<BranchMetadata>(META_COLLECTION);
     this.tags = metaDb.collection<Tag>(TAGS_COLLECTION);
+    this.commitData = metaDb.collection<CommitData>(COMMIT_DATA_COLLECTION);
   }
 
   async initialize(): Promise<void> {
     await this.commits.createIndex({ hash: 1 }, { unique: true });
     await this.commits.createIndex({ branchName: 1, timestamp: -1 });
     await this.tags.createIndex({ name: 1 }, { unique: true });
+    await this.commitData.createIndex({ commitHash: 1, collection: 1 });
   }
 
   /**
@@ -94,7 +98,49 @@ export class CommitEngine {
       );
     }
 
+    // Store full document data for time travel (Phase 6.1)
+    // Non-blocking — time travel storage failure must never break commits
+    try {
+      await this.storeCommitDocuments(hash, branchName);
+    } catch {
+      // Silently skip — time travel data is optional, commits are critical
+    }
+
     return commit;
+  }
+
+  /**
+   * Store full document data for a commit — enables time travel queries.
+   */
+  private async storeCommitDocuments(commitHash: string, branchName: string): Promise<void> {
+    const branch = await this.branches.findOne({
+      name: branchName,
+      status: { $ne: "deleted" },
+    });
+    if (!branch) return;
+
+    const dbName = branch.branchDatabase ?? `${this.config.branchPrefix}${branchName}`;
+    const db = this.client.db(dbName);
+    const collections = await db.listCollections().toArray();
+
+    for (const coll of collections) {
+      if (coll.name.startsWith("system.")) continue;
+      const docs = await db.collection(coll.name).find({}).toArray();
+      if (docs.length === 0) continue;
+
+      const cleanDocs = docs.map(d => ({
+        ...d,
+        _id: d._id?.toString?.() ?? d._id,
+      }));
+
+      await this.commitData.insertOne({
+        commitHash,
+        collection: coll.name,
+        documents: cleanDocs as Record<string, unknown>[],
+        documentCount: cleanDocs.length,
+        storedAt: new Date(),
+      });
+    }
   }
 
   /**
