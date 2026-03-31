@@ -1,0 +1,31 @@
+# MongoBranch — Atlas Local Development (preview)
+# Uses the `preview` tag — includes experimental features:
+#   - MongoDB Search in Community (mongot)
+#   - Auto-embedding (Voyage AI integration)
+#   - Atlas Search + Vector Search
+#
+# Port 27018 to avoid conflicts with other local MongoDB on 27017
+#
+# Usage: docker compose up -d
+# Connect: mongodb://localhost:27018/?directConnection=true
+# Stop: docker compose down
+# Logs: docker logs mongobranch-atlas
+
+services:
+  mongobranch:
+    image: mongodb/mongodb-atlas-local:preview
+    hostname: mongobranch
+    container_name: mongobranch-atlas
+    ports:
+      - 27018:27017
+    environment:
+      # Uncomment to enable auto-embedding with Voyage AI:
+      # VOYAGE_API_KEY: ${VOYAGE_API_KEY}
+      DO_NOT_TRACK: 1
+    volumes:
+      - mongobranch_data:/data/db
+      - mongobranch_config:/data/configdb
+
+volumes:
+  mongobranch_data:
+  mongobranch_config:

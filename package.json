@@ -1,0 +1,60 @@
+{
+  "name": "mongobranch",
+  "version": "0.2.0",
+  "description": "Git-like branching, diffing, and merging for MongoDB data — built for AI agents",
+  "module": "src/cli.ts",
+  "type": "module",
+  "bin": {
+    "mb": "src/cli.ts",
+    "mongobranch": "src/cli.ts",
+    "mongobranch-mcp": "src/mcp/server.ts"
+  },
+  "exports": {
+    ".": "./src/core/types.ts",
+    "./branch": "./src/core/branch.ts",
+    "./diff": "./src/core/diff.ts",
+    "./merge": "./src/core/merge.ts",
+    "./agent": "./src/core/agent.ts",
+    "./history": "./src/core/history.ts",
+    "./mcp/tools": "./src/mcp/tools.ts"
+  },
+  "scripts": {
+    "start": "bun src/cli.ts",
+    "mcp": "bun src/mcp/server.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "mongodb",
+    "branching",
+    "diff",
+    "merge",
+    "ai-agents",
+    "mcp",
+    "model-context-protocol",
+    "git-for-data",
+    "database-branching"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rom-iluz/mongobranch"
+  },
+  "author": "Rom Iluz <rom@iluz.net>",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "mongodb-memory-server": "^11.0.1",
+    "vitest": "^4.1.2"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "chalk": "^5.6.2",
+    "commander": "^14.0.3",
+    "jsondiffpatch": "^0.7.3",
+    "mongodb": "^7.1.1",
+    "yaml": "^2.8.3"
+  }
+}
