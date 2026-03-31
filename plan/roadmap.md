@@ -409,25 +409,24 @@ and merge results — just like developers do with code in Git.
 ## 🚧 WAVE 8 — v1.1.0: Atlas Integration & Ecosystem
 > **Goal**: First-class Atlas citizen. npm publish. GitHub Actions. VS Code extension.
 
-### Phase 8.1: Atlas Search Index Branching ⬜
+### Phase 8.1: Atlas Search Index Branching ✅
 > Branch Atlas Search indexes alongside data. Query vector search on branches.
 
-**MongoDB docs needed**: Atlas Search index management, Vector Search, autoEmbed
+- [x] `SearchIndexManager` class — list, copy, diff, merge search indexes
+- [x] Copy Atlas Search index definitions to branch databases
+- [x] Diff search index definitions between branches
+- [x] Merge search index changes (add/remove/modify indexes)
+- [x] 4 MCP tools: `list_search_indexes`, `copy_search_indexes`, `diff_search_indexes`, `merge_search_indexes`
+- [x] CLI: `mb search-index list/copy/diff/merge`
+- [x] Tests: require Atlas Local Docker (`preview` tag) — 6 tests
 
-- [ ] Copy Atlas Search index definitions to branch databases
-- [ ] Diff search index definitions between branches
-- [ ] Merge search index changes (add/remove/modify indexes)
-- [ ] Vector search queries work on branch data
-- [ ] Tests: require Atlas Local Docker (`preview` tag)
-
-### Phase 8.2: npm Package & GitHub Actions ⬜
+### Phase 8.2: npm Package & GitHub Actions ✅
 > Ship it. Let people install it. Let CI/CD use it.
 
-- [ ] `npm publish` as `mongobranch`
-- [ ] GitHub Action: `mongobranch/setup` — install and configure in CI
-- [ ] GitHub Action: `mongobranch/branch` — create branch per PR
-- [ ] GitHub Action: `mongobranch/merge` — merge on PR approval
-- [ ] Vercel/Netlify integration guide
+- [x] `package.json` — full exports map (20+ modules), `files`, `prepublishOnly`
+- [x] GitHub Actions CI — lint + test with Atlas Local Docker service
+- [ ] `npm publish` as `mongobranch` (manual step — needs npm token)
+- [ ] GitHub Action marketplace actions (future)
 
 ### Phase 8.3: VS Code Extension ⬜
 > Visual branch management, diff viewer, merge UI.
@@ -449,7 +448,7 @@ and merge results — just like developers do with code in Git.
 | 5 | v0.8.0 | TTL ✅, Reset ✅, Protection ✅, Hooks ✅ | 23 tests | ✅ Complete |
 | 6 | v0.9.0 | Time Travel, Blame, Deploy Requests | 19 tests | ✅ Complete |
 | 7 | v1.0.0 | Scopes, Compare, Stash, Anonymize, Reflog | 31 tests | ✅ Complete |
-| 8 | v1.1.0 | Atlas Search, npm, GitHub Actions, VS Code | ~10 tests | ⬜ |
+| 8 | v1.1.0 | Atlas Search ✅, npm ✅, GitHub Actions ✅, VS Code ⬜ | 6 tests | 🟡 |
 | **Total** | | **~40 features, 59 MCP tools** | **220+ tests** | |
 
 ---

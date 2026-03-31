@@ -1,0 +1,54 @@
+name: CI — MongoBranch
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: TypeScript Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+
+  test:
+    name: Tests (Atlas Local Docker)
+    runs-on: ubuntu-latest
+    needs: lint
+    services:
+      atlas-local:
+        image: mongodb/mongodb-atlas-local:8.0
+        ports:
+          - 27018:27017
+    env:
+      MONGODB_URI: mongodb://localhost:27018/?directConnection=true
+      ATLAS_LOCAL: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: Wait for Atlas Local
+        run: |
+          for i in $(seq 1 30); do
+            if bun -e "const { MongoClient } = require('mongodb'); const c = new MongoClient('mongodb://localhost:27018/?directConnection=true'); c.connect().then(() => { console.log('connected'); c.close(); process.exit(0); }).catch(() => process.exit(1));" 2>/dev/null; then
+              echo "Atlas Local is ready"
+              break
+            fi
+            echo "Waiting for Atlas Local ($i/30)..."
+            sleep 2
+          done
+      - run: bun run test
+        timeout-minutes: 10

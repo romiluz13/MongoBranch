@@ -16,14 +16,36 @@
     "./merge": "./src/core/merge.ts",
     "./agent": "./src/core/agent.ts",
     "./history": "./src/core/history.ts",
-    "./mcp/tools": "./src/mcp/tools.ts"
+    "./commit": "./src/core/commit.ts",
+    "./oplog": "./src/core/oplog.ts",
+    "./proxy": "./src/core/proxy.ts",
+    "./queue": "./src/core/queue.ts",
+    "./hooks": "./src/core/hooks.ts",
+    "./protection": "./src/core/protection.ts",
+    "./timetravel": "./src/core/timetravel.ts",
+    "./deploy": "./src/core/deploy.ts",
+    "./scope": "./src/core/scope.ts",
+    "./compare": "./src/core/compare.ts",
+    "./stash": "./src/core/stash.ts",
+    "./anonymize": "./src/core/anonymize.ts",
+    "./reflog": "./src/core/reflog.ts",
+    "./search-index": "./src/core/search-index.ts",
+    "./mcp/tools": "./src/mcp/tools.ts",
+    "./mcp/server": "./src/mcp/server.ts"
   },
   "scripts": {
     "start": "bun src/cli.ts",
     "mcp": "bun src/mcp/server.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "bun run lint && bun run test"
   },
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
   "keywords": [
     "mongodb",
     "branching",

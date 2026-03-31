@@ -23,6 +23,7 @@ import { BranchComparator } from "../core/compare.ts";
 import { StashManager } from "../core/stash.ts";
 import { AnonymizeEngine } from "../core/anonymize.ts";
 import { ReflogManager } from "../core/reflog.ts";
+import { SearchIndexManager } from "../core/search-index.ts";
 import type { MongoBranchConfig } from "../core/types.ts";
 
 interface McpToolResult {
@@ -61,6 +62,7 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
   const stashManager = new StashManager(client, config);
   const anonymizeEngine = new AnonymizeEngine(client, config);
   const reflogManager = new ReflogManager(client, config);
+  const searchIndexManager = new SearchIndexManager(client, config);
 
   // Initialize all managers (create indexes)
   let initialized = false;
@@ -1298,6 +1300,92 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
           `  ${e.timestamp.toISOString()} ${e.branchName} ${e.action}: ${e.detail}${e.commitHash ? ` (${e.commitHash.slice(0, 8)})` : ""}`
         );
         return textResult(`Reflog (${entries.length} entries):\n${lines.join("\n")}`);
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    // ── Search Index Tools (Wave 8) ─────────────────────────
+
+    /**
+     * list_search_indexes — List Atlas Search & Vector Search indexes on a branch.
+     */
+    async list_search_indexes(args: {
+      branchName: string;
+      collection?: string;
+    }): Promise<McpToolResult> {
+      try {
+        const indexes = await searchIndexManager.listIndexes(args.branchName, args.collection);
+        if (indexes.length === 0) {
+          return textResult(`No search indexes on "${args.branchName}"` +
+            (args.collection ? ` (collection: ${args.collection})` : ""));
+        }
+        const lines = indexes.map(i =>
+          `  ${i.collectionName}.${i.name} [${i.type}] status=${i.status ?? "unknown"} queryable=${i.queryable}`
+        );
+        return textResult(`Search indexes on "${args.branchName}" (${indexes.length}):\n${lines.join("\n")}`);
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    /**
+     * copy_search_indexes — Copy search index definitions from one branch to another.
+     */
+    async copy_search_indexes(args: {
+      sourceBranch: string;
+      targetBranch: string;
+      collection?: string;
+    }): Promise<McpToolResult> {
+      try {
+        const result = await searchIndexManager.copyIndexes(args.sourceBranch, args.targetBranch, args.collection);
+        return textResult(
+          `Copied search indexes: ${result.sourceBranch} → ${result.targetBranch}\n` +
+          `  Copied: ${result.indexesCopied}, Failed: ${result.indexesFailed}`
+        );
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    /**
+     * diff_search_indexes — Compare search index definitions between two branches.
+     */
+    async diff_search_indexes(args: {
+      sourceBranch: string;
+      targetBranch: string;
+      collection?: string;
+    }): Promise<McpToolResult> {
+      try {
+        const diffs = await searchIndexManager.diffIndexes(args.sourceBranch, args.targetBranch, args.collection);
+        if (diffs.length === 0) {
+          return textResult("Search indexes are identical between branches");
+        }
+        return textResult(JSON.stringify(diffs, null, 2));
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    /**
+     * merge_search_indexes — Merge search index definitions from source to target.
+     */
+    async merge_search_indexes(args: {
+      sourceBranch: string;
+      targetBranch: string;
+      collection?: string;
+      removeOrphans?: boolean;
+    }): Promise<McpToolResult> {
+      try {
+        const result = await searchIndexManager.mergeIndexes(
+          args.sourceBranch, args.targetBranch, args.collection, { removeOrphans: args.removeOrphans }
+        );
+        return textResult(
+          `Search index merge: ${result.sourceBranch} → ${result.targetBranch}\n` +
+          `  Created: ${result.indexesCreated}, Updated: ${result.indexesUpdated}, Removed: ${result.indexesRemoved}\n` +
+          `  Success: ${result.success}` +
+          (result.errors.length > 0 ? `\n  Errors: ${result.errors.map(e => `${e.collection}.${e.indexName}: ${e.error}`).join("; ")}` : "")
+        );
       } catch (err: unknown) {
         return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
       }

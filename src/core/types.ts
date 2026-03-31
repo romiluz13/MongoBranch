@@ -492,3 +492,50 @@ export interface OperationEntry {
   after?: Record<string, unknown>;
   performedBy?: string;
 }
+
+// ── Search Index Types ───────────────────────────────────
+
+export type SearchIndexType = "search" | "vectorSearch";
+
+export interface SearchIndexDefinition {
+  name: string;
+  type: SearchIndexType;
+  collectionName: string;
+  definition: Record<string, unknown>;  // Analyzer mappings or vector fields
+  status?: string;                       // READY, BUILDING, etc.
+  queryable?: boolean;
+}
+
+export interface SearchIndexDiff {
+  collection: string;
+  added: SearchIndexDefinition[];        // In source but not target
+  removed: SearchIndexDefinition[];      // In target but not source
+  modified: SearchIndexModification[];   // Same name, different definition
+  unchanged: string[];                   // Same name, same definition
+}
+
+export interface SearchIndexModification {
+  name: string;
+  type: SearchIndexType;
+  collection: string;
+  source: Record<string, unknown>;       // Definition in source
+  target: Record<string, unknown>;       // Definition in target
+}
+
+export interface SearchIndexCopyResult {
+  sourceBranch: string;
+  targetBranch: string;
+  indexesCopied: number;
+  indexesFailed: number;
+  details: { collection: string; indexName: string; status: "copied" | "failed"; error?: string }[];
+}
+
+export interface SearchIndexMergeResult {
+  sourceBranch: string;
+  targetBranch: string;
+  indexesCreated: number;
+  indexesUpdated: number;
+  indexesRemoved: number;
+  errors: { collection: string; indexName: string; error: string }[];
+  success: boolean;
+}

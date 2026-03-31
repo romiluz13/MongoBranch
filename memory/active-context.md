@@ -79,8 +79,13 @@
 - CLI: stash save/pop/list, compare, reflog, anonymize
 - **220+ tests, 22 test files, all pass (npx vitest run exit 0)**
 
-### Next Up: Wave 8 — Atlas Integration & Ecosystem (v1.1.0)
-- Atlas Search branching, npm publish, GitHub Actions, VS Code extension
+### 🎉 WAVE 8 IN PROGRESS — v1.1.0
+- **Phase 8.1**: Atlas Search Index Branching — SearchIndexManager (list/copy/diff/merge) — COMPLETE
+- **Phase 8.2**: npm Package & GitHub Actions — exports map, CI/CD pipeline — COMPLETE
+- New files: `src/core/search-index.ts`, `tests/core/search-index.test.ts`, `.github/workflows/ci.yml`
+- 4 new MCP tools: `list_search_indexes`, `copy_search_indexes`, `diff_search_indexes`, `merge_search_indexes`
+- CLI: `mb search-index list/copy/diff/merge`
+- Package.json: full exports map (20+ modules), `files` field, `prepublishOnly` script
 
 ### Key Architecture Decisions Made
 - Three-way merge: 6-step process (Dolt-validated) — merge base via BFS, per-field conflicts

@@ -139,6 +139,7 @@ At the END of every prompt, BEFORE responding to the user:
 | `src/core/stash.ts` | StashManager class — stash/pop/list/drop, stash stack |
 | `src/core/anonymize.ts` | AnonymizeEngine class — hash/mask/null/redact PII strategies |
 | `src/core/reflog.ts` | ReflogManager class — branch pointer tracking, survives deletion |
+| `src/core/search-index.ts` | SearchIndexManager class — Atlas Search index branching, list/copy/diff/merge |
 | `src/core/types.ts` | TypeScript types, interfaces, config, constants |
 | `src/cli.ts` | Commander.js CLI entry point (`mb branch`, `mb commit` commands) |
 | `src/mcp/server.ts` | MCP Server — stdio transport, tool registration |
@@ -172,11 +173,13 @@ At the END of every prompt, BEFORE responding to the user:
 | `tests/core/stash.test.ts` | Stash — stash/pop/list/drop, stack ordering |
 | `tests/core/anonymize.test.ts` | Anonymization — hash/mask/null/redact strategies |
 | `tests/core/reflog.test.ts` | Reflog — record/query, survives deletion, action filter |
+| `tests/core/search-index.test.ts` | Search indexes — list/copy/diff/merge on branches |
 | `tests/mcp/server.test.ts` | MCP tools — create/list/diff/merge via tool handlers |
 
 ### 🐳 Infrastructure
 | File | Purpose |
 |------|---------|
 | `docker-compose.yml` | Atlas Local preview on port 27018 |
+| `.github/workflows/ci.yml` | GitHub Actions CI — lint + test with Atlas Local Docker |
 | `package.json` | Project config — mongobranch v0.1.0 |
 | `tsconfig.json` | TypeScript strict config |

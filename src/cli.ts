@@ -22,6 +22,7 @@ import { StashManager } from "./core/stash.ts";
 import { BranchComparator } from "./core/compare.ts";
 import { ReflogManager } from "./core/reflog.ts";
 import { AnonymizeEngine } from "./core/anonymize.ts";
+import { SearchIndexManager } from "./core/search-index.ts";
 import type { MongoBranchConfig } from "./core/types.ts";
 import { DEFAULT_CONFIG } from "./core/types.ts";
 
@@ -772,6 +773,88 @@ program.command("anonymize <branch>")
       ]);
       console.log(chalk.green(`🔒 Anonymized branch "${result.branchName}" created`));
       console.log(chalk.dim(`   ${result.documentsProcessed} docs, ${result.fieldsAnonymized} fields anonymized`));
+    });
+  });
+
+// ── Search Index Commands (Wave 8) ────────────────────────
+
+const searchIdx = program.command("search-index")
+  .description("Manage Atlas Search & Vector Search indexes on branches");
+
+searchIdx.command("list <branch>")
+  .description("List search indexes on a branch")
+  .option("-c, --collection <name>", "Filter by collection")
+  .action(async (branch: string, opts) => {
+    await withClient(async (client, config) => {
+      const mgr = new SearchIndexManager(client, config);
+      const indexes = await mgr.listIndexes(branch, opts.collection);
+      if (indexes.length === 0) {
+        console.log(chalk.dim("No search indexes found"));
+        return;
+      }
+      console.log(chalk.bold(`\n🔍 Search indexes on "${branch}" (${indexes.length}):\n`));
+      for (const idx of indexes) {
+        console.log(
+          `  ${chalk.cyan(idx.collectionName)}.${chalk.yellow(idx.name)} ` +
+          `[${idx.type}] status=${idx.status ?? "unknown"}`
+        );
+      }
+      console.log();
+    });
+  });
+
+searchIdx.command("copy <source> <target>")
+  .description("Copy search index definitions between branches")
+  .option("-c, --collection <name>", "Filter by collection")
+  .action(async (source: string, target: string, opts) => {
+    await withClient(async (client, config) => {
+      const mgr = new SearchIndexManager(client, config);
+      const result = await mgr.copyIndexes(source, target, opts.collection);
+      console.log(chalk.green(`📋 Copied ${result.indexesCopied} search indexes`));
+      if (result.indexesFailed > 0) {
+        console.log(chalk.red(`   ${result.indexesFailed} failed`));
+      }
+    });
+  });
+
+searchIdx.command("diff <source> <target>")
+  .description("Compare search index definitions between branches")
+  .option("-c, --collection <name>", "Filter by collection")
+  .action(async (source: string, target: string, opts) => {
+    await withClient(async (client, config) => {
+      const mgr = new SearchIndexManager(client, config);
+      const diffs = await mgr.diffIndexes(source, target, opts.collection);
+      if (diffs.length === 0) {
+        console.log(chalk.green("✅ Search indexes are identical"));
+        return;
+      }
+      console.log(chalk.bold("\n🔍 Search index differences:\n"));
+      for (const diff of diffs) {
+        console.log(chalk.cyan(`  ${diff.collection}:`));
+        for (const a of diff.added) console.log(chalk.green(`    + ${a.name} [${a.type}]`));
+        for (const r of diff.removed) console.log(chalk.red(`    - ${r.name} [${r.type}]`));
+        for (const m of diff.modified) console.log(chalk.yellow(`    ~ ${m.name} [${m.type}]`));
+        if (diff.unchanged.length) console.log(chalk.dim(`    = ${diff.unchanged.join(", ")}`));
+      }
+      console.log();
+    });
+  });
+
+searchIdx.command("merge <source> <target>")
+  .description("Merge search index definitions from source to target")
+  .option("-c, --collection <name>", "Filter by collection")
+  .option("--remove-orphans", "Remove indexes only in target")
+  .action(async (source: string, target: string, opts) => {
+    await withClient(async (client, config) => {
+      const mgr = new SearchIndexManager(client, config);
+      const result = await mgr.mergeIndexes(source, target, opts.collection, {
+        removeOrphans: opts.removeOrphans,
+      });
+      console.log(chalk.green(`🔀 Search index merge: ${source} → ${target}`));
+      console.log(`   Created: ${result.indexesCreated}, Updated: ${result.indexesUpdated}, Removed: ${result.indexesRemoved}`);
+      if (!result.success) {
+        console.log(chalk.red(`   Errors: ${result.errors.length}`));
+      }
     });
   });
 

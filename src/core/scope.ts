@@ -42,18 +42,27 @@ export class ScopeManager {
    */
   async setScope(scope: Omit<AgentScope, "createdAt" | "updatedAt">): Promise<AgentScope> {
     const now = new Date();
+
+    // Separate createdAt (only on insert) from other fields (always set)
+    const { createdAt: _ignored, ...fieldsToSet } = {
+      ...scope,
+      updatedAt: now,
+    } as Record<string, unknown>;
+
+    await this.scopes.updateOne(
+      { agentId: scope.agentId },
+      {
+        $set: fieldsToSet,
+        $setOnInsert: { createdAt: now },
+      },
+      { upsert: true }
+    );
+
     const full: AgentScope = {
       ...scope,
       createdAt: now,
       updatedAt: now,
     };
-
-    await this.scopes.updateOne(
-      { agentId: scope.agentId },
-      { $set: { ...full }, $setOnInsert: { createdAt: now } },
-      { upsert: true }
-    );
-
     return full;
   }
 

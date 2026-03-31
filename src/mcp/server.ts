@@ -587,6 +587,44 @@ async function main(): Promise<void> {
     },
   }, async (args) => tools.reflog(args));
 
+  // ── Tool: Search Index Tools (Wave 8) ──────────────────────
+
+  mcpServer.registerTool("list_search_indexes", {
+    description: "List Atlas Search & Vector Search indexes on a branch.",
+    inputSchema: {
+      branchName: z.string().describe("Branch name"),
+      collection: z.string().optional().describe("Filter by collection"),
+    },
+  }, async (args) => tools.list_search_indexes(args));
+
+  mcpServer.registerTool("copy_search_indexes", {
+    description: "Copy search index definitions from one branch to another.",
+    inputSchema: {
+      sourceBranch: z.string().describe("Source branch"),
+      targetBranch: z.string().describe("Target branch"),
+      collection: z.string().optional().describe("Filter by collection"),
+    },
+  }, async (args) => tools.copy_search_indexes(args));
+
+  mcpServer.registerTool("diff_search_indexes", {
+    description: "Compare search index definitions between two branches.",
+    inputSchema: {
+      sourceBranch: z.string().describe("Source branch"),
+      targetBranch: z.string().describe("Target branch"),
+      collection: z.string().optional().describe("Filter by collection"),
+    },
+  }, async (args) => tools.diff_search_indexes(args));
+
+  mcpServer.registerTool("merge_search_indexes", {
+    description: "Merge search index definitions from source branch to target.",
+    inputSchema: {
+      sourceBranch: z.string().describe("Source branch"),
+      targetBranch: z.string().describe("Target branch"),
+      collection: z.string().optional().describe("Filter by collection"),
+      removeOrphans: z.boolean().optional().describe("Remove indexes only in target"),
+    },
+  }, async (args) => tools.merge_search_indexes(args));
+
   // ── Start stdio transport ───────────────────────────────────
   const transport = new StdioServerTransport();
   await mcpServer.connect(transport);
