@@ -134,6 +134,11 @@ At the END of every prompt, BEFORE responding to the user:
 | `src/core/hooks.ts` | HookManager class — 14 event types, pre-reject/post-fire-and-forget |
 | `src/core/timetravel.ts` | TimeTravelEngine class — findAt, listCollectionsAt, blame |
 | `src/core/deploy.ts` | DeployRequestManager class — open/approve/reject/execute/list/get |
+| `src/core/scope.ts` | ScopeManager class — agent permissions, collection ACLs, quota |
+| `src/core/compare.ts` | BranchComparator class — N-way branch comparison matrix |
+| `src/core/stash.ts` | StashManager class — stash/pop/list/drop, stash stack |
+| `src/core/anonymize.ts` | AnonymizeEngine class — hash/mask/null/redact PII strategies |
+| `src/core/reflog.ts` | ReflogManager class — branch pointer tracking, survives deletion |
 | `src/core/types.ts` | TypeScript types, interfaces, config, constants |
 | `src/cli.ts` | Commander.js CLI entry point (`mb branch`, `mb commit` commands) |
 | `src/mcp/server.ts` | MCP Server — stdio transport, tool registration |
@@ -162,6 +167,11 @@ At the END of every prompt, BEFORE responding to the user:
 | `tests/embedding.ts` | Voyage AI embedding helper — real API calls, cosine similarity |
 | `tests/core/timetravel.test.ts` | Time travel — findAt by commit/timestamp, listCollections, blame |
 | `tests/core/deploy.test.ts` | Deploy requests — open/approve/reject/execute/list/get |
+| `tests/core/scope.test.ts` | Agent scopes — permissions, collection ACLs, quota, violations |
+| `tests/core/compare.test.ts` | Branch comparison — N-way compare, presence matrix, stats |
+| `tests/core/stash.test.ts` | Stash — stash/pop/list/drop, stack ordering |
+| `tests/core/anonymize.test.ts` | Anonymization — hash/mask/null/redact strategies |
+| `tests/core/reflog.test.ts` | Reflog — record/query, survives deletion, action filter |
 | `tests/mcp/server.test.ts` | MCP tools — create/list/diff/merge via tool handlers |
 
 ### 🐳 Infrastructure

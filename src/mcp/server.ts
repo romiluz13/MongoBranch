@@ -510,6 +510,83 @@ async function main(): Promise<void> {
     },
   }, async (args) => tools.list_deploy_requests(args));
 
+  // ── Tool: Agent Scopes (Wave 7) ──────────────────────────────
+  mcpServer.registerTool("set_agent_scope", {
+    description: "Set permissions and restrictions for an AI agent.",
+    inputSchema: {
+      agentId: z.string().describe("Agent ID"),
+      permissions: z.array(z.string()).describe("Allowed ops: read, write, delete, merge"),
+      allowedCollections: z.array(z.string()).optional().describe("Collections the agent can access"),
+      deniedCollections: z.array(z.string()).optional().describe("Explicitly denied collections"),
+      maxBranches: z.number().optional().describe("Max simultaneous branches"),
+    },
+  }, async (args) => tools.set_agent_scope(args));
+
+  mcpServer.registerTool("check_agent_permission", {
+    description: "Check if an agent is allowed to perform an operation on a collection.",
+    inputSchema: {
+      agentId: z.string().describe("Agent ID"),
+      collection: z.string().describe("Collection name"),
+      operation: z.string().describe("Operation: read, write, delete, merge"),
+    },
+  }, async (args) => tools.check_agent_permission(args));
+
+  mcpServer.registerTool("get_agent_violations", {
+    description: "Get scope violation log for an agent.",
+    inputSchema: { agentId: z.string().describe("Agent ID") },
+  }, async (args) => tools.get_agent_violations(args));
+
+  // ── Tool: Branch Compare (Wave 7) ────────────────────────────
+  mcpServer.registerTool("compare_branches", {
+    description: "Compare N branches side by side — per-document presence matrix.",
+    inputSchema: {
+      branches: z.array(z.string()).describe("2+ branch names to compare"),
+    },
+  }, async (args) => tools.compare_branches(args));
+
+  // ── Tool: Stash (Wave 7) ─────────────────────────────────────
+  mcpServer.registerTool("stash", {
+    description: "Stash current branch data (save + clear). Like git stash.",
+    inputSchema: {
+      branchName: z.string().describe("Branch to stash"),
+      message: z.string().describe("Stash message"),
+    },
+  }, async (args) => tools.stash(args));
+
+  mcpServer.registerTool("stash_pop", {
+    description: "Pop most recent stash — restore data to branch.",
+    inputSchema: { branchName: z.string().describe("Branch to pop stash on") },
+  }, async (args) => tools.stash_pop(args));
+
+  mcpServer.registerTool("stash_list", {
+    description: "List stashes for a branch.",
+    inputSchema: { branchName: z.string().describe("Branch name") },
+  }, async (args) => tools.stash_list(args));
+
+  // ── Tool: Anonymize (Wave 7) ─────────────────────────────────
+  mcpServer.registerTool("create_anonymized_branch", {
+    description: "Create a branch with anonymized/masked PII data. Strategies: hash, mask, null, redact.",
+    inputSchema: {
+      branchName: z.string().describe("Name for the anonymized branch"),
+      rules: z.array(z.object({
+        collection: z.string(),
+        fields: z.array(z.object({
+          path: z.string().describe("Dot-notation field path"),
+          strategy: z.string().describe("hash | mask | null | redact"),
+        })),
+      })).describe("Anonymization rules"),
+    },
+  }, async (args) => tools.create_anonymized_branch(args));
+
+  // ── Tool: Reflog (Wave 7) ────────────────────────────────────
+  mcpServer.registerTool("reflog", {
+    description: "View reflog — branch pointer movement history. Survives deletion.",
+    inputSchema: {
+      branchName: z.string().optional().describe("Filter by branch (omit for all)"),
+      limit: z.number().optional().describe("Max entries to return"),
+    },
+  }, async (args) => tools.reflog(args));
+
   // ── Start stdio transport ───────────────────────────────────
   const transport = new StdioServerTransport();
   await mcpServer.connect(transport);

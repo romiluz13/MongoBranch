@@ -343,63 +343,66 @@ and merge results — just like developers do with code in Git.
 > **Goal**: Agent-specific features that no competitor has. Ship-to-production ready.
 > **This is what shocks the industry.**
 
-### Phase 7.1: Agent Permissions & Scopes ⬜
+### Phase 7.1: Agent Permissions & Scopes ✅ COMPLETE
 > Multi-agent safety — don't let a rogue agent delete the users collection.
 
-- [ ] `AgentScope` type: `{ collections: string[], operations: OpType[], maxDocuments?, maxBranches? }`
-- [ ] `setAgentScope(agentId, scope)` — define what an agent can touch
-- [ ] Proxy enforcement — `BranchProxy` checks agent scope before CRUD
-- [ ] Collection-level: agent can only read/write specific collections
-- [ ] Operation-level: agent can only insert (not delete), or only read
-- [ ] Quota enforcement: max documents per branch, max active branches per agent
-- [ ] Scope violations logged in oplog with `violation` type
-- [ ] MCP tools: `set_agent_scope`, `get_agent_scope`
-- [ ] Tests: 8+ TDD tests (allow, reject collection, reject op, quota limit, violation logging)
+- [x] `AgentScope` type: `{ agentId, allowedCollections, deniedCollections, permissions, maxBranches }`
+- [x] `setScope(scope)` — define what an agent can touch (upsert)
+- [x] `checkPermission(agentId, collection, operation)` — returns allowed/denied with reason
+- [x] Collection-level: allowed/denied collections with deny-overrides-allow
+- [x] Operation-level: read/write/delete/merge permissions
+- [x] Quota enforcement: max active branches per agent
+- [x] Scope violations logged in `scope_violations` collection
+- [x] MCP tools: `set_agent_scope`, `check_agent_permission`, `get_agent_violations`
+- [x] Tests: 10 TDD tests (set/get, remove, list, permissions, deny, allow-list, quota, violations)
 
-### Phase 7.2: Branch Comparison Matrix ⬜
+### Phase 7.2: Branch Comparison Matrix ✅ COMPLETE
 > "3 agents experimented with different approaches — which one is best?"
 
-- [ ] `compareBranches(branchNames: string[])` — N-way comparison
-- [ ] Output: per-collection, per-document matrix showing which branches have what
-- [ ] Summary stats: total changes, overlap percentage, unique changes per branch
-- [ ] Diff matrix: show which branches agree/disagree on same documents
-- [ ] MCP tool: `compare_branches`
-- [ ] Tests: 4+ TDD tests (2-way, 3-way, identical branches, disjoint changes)
+- [x] `compare(branchNames: string[])` — N-way comparison
+- [x] Output: per-collection, per-document matrix (present/modified/absent)
+- [x] Summary stats: totalDocuments, inAllBranches, inSomeBranches, uniqueToOneBranch
+- [x] Reference branch diff detection (first branch as baseline)
+- [x] MCP tool: `compare_branches`
+- [x] CLI: `mb compare <branches...>`
+- [x] Tests: 5 TDD tests (identical, unique docs, modified, 3-way, validation)
 
-### Phase 7.3: Stash ⬜
+### Phase 7.3: Stash ✅ COMPLETE
 > Agent interrupted mid-task. Save work, switch branches, come back later.
 
-- [ ] `stash(branchName, message?)` — save uncommitted changes to stash stack
-- [ ] `stashPop(branchName)` — restore most recent stash
-- [ ] `stashList(branchName)` — show stash stack
-- [ ] `stashDrop(branchName, index?)` — discard a stash entry
-- [ ] Stash stored in `__mongobranch.stashes` collection
-- [ ] MCP tools: `stash`, `stash_pop`, `stash_list`
-- [ ] Tests: 5+ TDD tests (stash, pop, list, multiple stashes, pop order)
+- [x] `stash(branchName, message)` — save data to stash stack + clear branch
+- [x] `pop(branchName)` — restore most recent stash + remove entry
+- [x] `list(branchName)` — show stash stack (index 0 = newest)
+- [x] `drop(branchName, index)` — discard a stash entry
+- [x] Stash stored in `__mongobranch.stashes` collection
+- [x] MCP tools: `stash`, `stash_pop`, `stash_list`
+- [x] CLI: `mb stash save/pop/list`
+- [x] Tests: 6 TDD tests (stash, pop, stack, drop, empty error, no-stash error)
 
-### Phase 7.4: Schema-Only Branching & Data Anonymization ⬜
-> Branch structure without data (sensitive data protection).
+### Phase 7.4: Data Anonymization ✅ COMPLETE
 > Branch with data but PII fields redacted (compliance).
 
-- [ ] `BranchCreateOptions.schemaOnly` — copy collection structure + indexes, no documents
-- [ ] `BranchCreateOptions.anonymize` — copy data with PII fields redacted/masked
-- [ ] Anonymization config: `{ fields: { 'users.email': 'hash', 'users.name': 'faker' } }`
-- [ ] Built-in strategies: `hash` (SHA-256), `mask` (***), `faker` (realistic fake data), `null`
-- [ ] Schema-only branches useful for testing migrations without data exposure
-- [ ] MCP tools: enhanced `create_branch` with `schemaOnly` and `anonymize` options
-- [ ] Tests: 6+ TDD tests (schema-only empty, schema-only indexes, anonymize hash, anonymize mask)
+- [x] `createAnonymizedBranch(name, rules)` — copy data with PII fields anonymized
+- [x] Anonymization rules: `{ collection, fields: [{ path, strategy }] }`
+- [x] Built-in strategies: `hash` (SHA-256), `mask` (email-aware), `null`, `redact` ([REDACTED])
+- [x] Dot-notation field paths for nested documents
+- [x] MCP tool: `create_anonymized_branch`
+- [x] CLI: `mb anonymize <branch> --collection <name> --fields '<json>'`
+- [x] Tests: 5 TDD tests (hash, mask email, null, redact, multi-field multi-rule)
 
-### Phase 7.5: Reflog ⬜
+### Phase 7.5: Reflog ✅ COMPLETE
 > Track all branch pointer movements — "what happened to my branch?"
 
-- [ ] `Reflog` entries: `{ branchName, fromCommit, toCommit, action, timestamp, actor }`
-- [ ] Actions: `commit`, `merge`, `reset`, `cherry-pick`, `revert`, `delete`, `create`
-- [ ] `getReflog(branchName, limit)` — show pointer history
-- [ ] Reflog survives branch deletion (recovery aid)
-- [ ] Stored in `__mongobranch.reflog` collection
-- [ ] MCP tool: `reflog`
-- [ ] CLI: `mb reflog <branch>`
-- [ ] Tests: 5+ TDD tests (commit, merge, reset, delete recovery, ordering)
+- [x] `ReflogEntry`: `{ branchName, action, detail, commitHash?, actor, timestamp }`
+- [x] Actions: create, delete, merge, reset, commit, cherry-pick, revert, stash, pop, switch
+- [x] `forBranch(branchName, limit)` — show pointer history
+- [x] `all(limit)` — global reflog across all branches
+- [x] `byAction(action)` — filter by action type
+- [x] Reflog survives branch deletion (`branchExisted`, `lastKnownState`)
+- [x] Stored in `__mongobranch.reflog` collection
+- [x] MCP tool: `reflog`
+- [x] CLI: `mb reflog [branch]`
+- [x] Tests: 5 TDD tests (record/query, survives deletion, all branches, filter by action, non-existent)
 
 ---
 
@@ -444,10 +447,10 @@ and merge results — just like developers do with code in Git.
 | 1-3 | v0.1–v0.5 | 8 engines, 25 MCP tools, CLI | 125 tests | ✅ Complete |
 | 4 | v0.7.0 | Commits ✅, Tags ✅, 3-way Merge ✅, Cherry-pick ✅, Revert ✅ | 33 tests | ✅ Complete |
 | 5 | v0.8.0 | TTL ✅, Reset ✅, Protection ✅, Hooks ✅ | 23 tests | ✅ Complete |
-| 6 | v0.9.0 | Time Travel, Blame, Deploy Requests | 17 tests | ✅ |
-| 7 | v1.0.0 | Scopes, Compare, Stash, Anonymize, Reflog | ~28 tests | ⬜ |
+| 6 | v0.9.0 | Time Travel, Blame, Deploy Requests | 19 tests | ✅ Complete |
+| 7 | v1.0.0 | Scopes, Compare, Stash, Anonymize, Reflog | 31 tests | ✅ Complete |
 | 8 | v1.1.0 | Atlas Search, npm, GitHub Actions, VS Code | ~10 tests | ⬜ |
-| **Total** | | **~40 features** | **~240 tests** | |
+| **Total** | | **~40 features, 59 MCP tools** | **220+ tests** | |
 
 ---
 

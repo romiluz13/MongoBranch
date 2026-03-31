@@ -18,6 +18,10 @@ import { HistoryManager } from "./core/history.ts";
 import { CommitEngine } from "./core/commit.ts";
 import { TimeTravelEngine } from "./core/timetravel.ts";
 import { DeployRequestManager } from "./core/deploy.ts";
+import { StashManager } from "./core/stash.ts";
+import { BranchComparator } from "./core/compare.ts";
+import { ReflogManager } from "./core/reflog.ts";
+import { AnonymizeEngine } from "./core/anonymize.ts";
 import type { MongoBranchConfig } from "./core/types.ts";
 import { DEFAULT_CONFIG } from "./core/types.ts";
 
@@ -668,6 +672,106 @@ deployCmd
       console.log(chalk.green(`✅ Deploy request #${deployRequest.id} executed!`));
       console.log(chalk.dim(`   Merged: ${mergeResult.sourceBranch} → ${mergeResult.targetBranch}`));
       console.log(chalk.dim(`   +${mergeResult.documentsAdded} added, -${mergeResult.documentsRemoved} removed, ~${mergeResult.documentsModified} modified`));
+    });
+  });
+
+// ── Stash Commands (Wave 7) ─────────────────────────────────
+
+const stashCmd = program.command("stash").description("Save and restore uncommitted changes");
+
+stashCmd.command("save <branch>")
+  .description("Stash current branch data (save + clear)")
+  .option("-m, --message <text>", "Stash message", "WIP")
+  .action(async (branch: string, opts) => {
+    await withClient(async (client, config) => {
+      const mgr = new StashManager(client, config);
+      await mgr.initialize();
+      const entry = await mgr.stash(branch, opts.message);
+      console.log(chalk.green(`📦 Stashed "${entry.message}" on ${branch}`));
+    });
+  });
+
+stashCmd.command("pop <branch>")
+  .description("Restore most recent stash")
+  .action(async (branch: string) => {
+    await withClient(async (client, config) => {
+      const mgr = new StashManager(client, config);
+      await mgr.initialize();
+      const entry = await mgr.pop(branch);
+      console.log(chalk.green(`📦 Popped stash "${entry.message}" — data restored`));
+    });
+  });
+
+stashCmd.command("list <branch>")
+  .description("List stashes for a branch")
+  .action(async (branch: string) => {
+    await withClient(async (client, config) => {
+      const mgr = new StashManager(client, config);
+      await mgr.initialize();
+      const entries = await mgr.list(branch);
+      if (entries.length === 0) { console.log(chalk.dim("No stashes")); return; }
+      for (const e of entries) {
+        console.log(`  stash@{${e.index}}: ${e.message} ${chalk.dim(e.createdAt.toISOString())}`);
+      }
+    });
+  });
+
+// ── Compare Command (Wave 7) ───────────────────────────────
+
+program.command("compare <branches...>")
+  .description("Compare N branches side by side")
+  .action(async (branches: string[]) => {
+    await withClient(async (client, config) => {
+      const cmp = new BranchComparator(client, config);
+      const result = await cmp.compare(branches);
+      console.log(chalk.bold(`\n🔀 Compare: ${result.branches.join(" vs ")}\n`));
+      console.log(`  Total docs:      ${result.stats.totalDocuments}`);
+      console.log(`  In all branches: ${chalk.green(String(result.stats.inAllBranches))}`);
+      console.log(`  In some:         ${chalk.yellow(String(result.stats.inSomeBranches))}`);
+      console.log(`  Unique to one:   ${chalk.red(String(result.stats.uniqueToOneBranch))}\n`);
+    });
+  });
+
+// ── Reflog Command (Wave 7) ────────────────────────────────
+
+program.command("reflog [branch]")
+  .description("Show reflog — branch pointer movements (survives deletion)")
+  .option("-n, --limit <n>", "Max entries", "50")
+  .action(async (branch: string | undefined, opts) => {
+    await withClient(async (client, config) => {
+      const rl = new ReflogManager(client, config);
+      await rl.initialize();
+      const entries = branch
+        ? await rl.forBranch(branch, parseInt(opts.limit))
+        : await rl.all(parseInt(opts.limit));
+      if (entries.length === 0) { console.log(chalk.dim("No reflog entries")); return; }
+      console.log(chalk.bold(`\n📜 Reflog${branch ? ` (${branch})` : ""}:\n`));
+      for (const e of entries) {
+        console.log(
+          `  ${chalk.dim(e.timestamp.toISOString())} ` +
+          `${chalk.cyan(e.branchName)} ${chalk.yellow(e.action)}: ${e.detail}` +
+          (e.commitHash ? chalk.dim(` (${e.commitHash.slice(0, 8)})`) : "")
+        );
+      }
+      console.log();
+    });
+  });
+
+// ── Anonymize Command (Wave 7) ─────────────────────────────
+
+program.command("anonymize <branch>")
+  .description("Create a branch with anonymized PII data")
+  .requiredOption("--collection <name>", "Collection to anonymize")
+  .requiredOption("--fields <json>", 'Fields and strategies: \'[{"path":"email","strategy":"mask"}]\'')
+  .action(async (branch: string, opts) => {
+    await withClient(async (client, config) => {
+      const engine = new AnonymizeEngine(client, config);
+      const fields = JSON.parse(opts.fields);
+      const result = await engine.createAnonymizedBranch(branch, [
+        { collection: opts.collection, fields },
+      ]);
+      console.log(chalk.green(`🔒 Anonymized branch "${result.branchName}" created`));
+      console.log(chalk.dim(`   ${result.documentsProcessed} docs, ${result.fieldsAnonymized} fields anonymized`));
     });
   });
 

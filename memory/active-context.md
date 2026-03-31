@@ -68,8 +68,19 @@
 - Fixed test imports: vitest instead of bun:test for proper discovery
 - **200+ tests, 0 failures, 17 test files — vitest run exit 0**
 
-### Next Up: Wave 7 — Advanced Features (v1.0.0)
-- Scopes, Compare, Stash, Anonymize, Reflog
+### 🎉 WAVE 7 COMPLETE — v1.0.0
+- **Phase 7.1**: Agent Scopes — ScopeManager, permissions, collection ACLs, quota, violation logging — 10 tests
+- **Phase 7.2**: Branch Compare — BranchComparator, N-way matrix, overlap stats — 5 tests
+- **Phase 7.3**: Stash — StashManager, stash/pop/list/drop, stack — 6 tests
+- **Phase 7.4**: Anonymize — AnonymizeEngine, hash/mask/null/redact — 5 tests
+- **Phase 7.5**: Reflog — ReflogManager, survives deletion, action filter — 5 tests
+- New files: `src/core/{scope,compare,stash,anonymize,reflog}.ts`
+- 11 new MCP tools (59 total)
+- CLI: stash save/pop/list, compare, reflog, anonymize
+- **220+ tests, 22 test files, all pass (npx vitest run exit 0)**
+
+### Next Up: Wave 8 — Atlas Integration & Ecosystem (v1.1.0)
+- Atlas Search branching, npm publish, GitHub Actions, VS Code extension
 
 ### Key Architecture Decisions Made
 - Three-way merge: 6-step process (Dolt-validated) — merge base via BFS, per-field conflicts

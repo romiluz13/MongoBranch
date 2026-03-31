@@ -18,6 +18,11 @@ import { ProtectionManager } from "../core/protection.ts";
 import { HookManager } from "../core/hooks.ts";
 import { TimeTravelEngine } from "../core/timetravel.ts";
 import { DeployRequestManager } from "../core/deploy.ts";
+import { ScopeManager } from "../core/scope.ts";
+import { BranchComparator } from "../core/compare.ts";
+import { StashManager } from "../core/stash.ts";
+import { AnonymizeEngine } from "../core/anonymize.ts";
+import { ReflogManager } from "../core/reflog.ts";
 import type { MongoBranchConfig } from "../core/types.ts";
 
 interface McpToolResult {
@@ -51,6 +56,11 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
   const hookManager = new HookManager(client, config);
   const timeTravelEngine = new TimeTravelEngine(client, config);
   const deployRequestManager = new DeployRequestManager(client, config);
+  const scopeManager = new ScopeManager(client, config);
+  const branchComparator = new BranchComparator(client, config);
+  const stashManager = new StashManager(client, config);
+  const anonymizeEngine = new AnonymizeEngine(client, config);
+  const reflogManager = new ReflogManager(client, config);
 
   // Initialize all managers (create indexes)
   let initialized = false;
@@ -65,6 +75,9 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
       await hookManager.initialize();
       await timeTravelEngine.initialize();
       await deployRequestManager.initialize();
+      await scopeManager.initialize();
+      await stashManager.initialize();
+      await reflogManager.initialize();
       initialized = true;
     }
   }
@@ -1143,6 +1156,148 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
           `  #${dr.id} [${dr.status}] ${dr.sourceBranch} → ${dr.targetBranch} — ${dr.description} (${dr.createdBy})`
         );
         return textResult(`Deploy requests (${drs.length}):\n${lines.join("\n")}`);
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    // ── Agent Scope Tools (Wave 7) ──────────────────────────
+
+    async set_agent_scope(args: {
+      agentId: string;
+      permissions: string[];
+      allowedCollections?: string[];
+      deniedCollections?: string[];
+      maxBranches?: number;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const scope = await scopeManager.setScope({
+          agentId: args.agentId,
+          permissions: args.permissions as any,
+          allowedCollections: args.allowedCollections,
+          deniedCollections: args.deniedCollections,
+          maxBranches: args.maxBranches,
+        });
+        return textResult(`Scope set for agent "${scope.agentId}": ${scope.permissions.join(", ")}`);
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    async check_agent_permission(args: {
+      agentId: string;
+      collection: string;
+      operation: string;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const result = await scopeManager.checkPermission(args.agentId, args.collection, args.operation as any);
+        return textResult(result.allowed
+          ? `✅ Agent "${args.agentId}" allowed to ${args.operation} on ${args.collection}`
+          : `❌ Denied: ${result.reason}`);
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    async get_agent_violations(args: { agentId: string }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const violations = await scopeManager.getViolations(args.agentId);
+        if (violations.length === 0) return textResult(`No violations for agent "${args.agentId}"`);
+        const lines = violations.map(v =>
+          `  ${v.timestamp.toISOString()} — ${v.operation} on ${v.collection}: ${v.reason}`
+        );
+        return textResult(`Violations for "${args.agentId}" (${violations.length}):\n${lines.join("\n")}`);
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    // ── Branch Compare (Wave 7) ─────────────────────────────
+
+    async compare_branches(args: { branches: string[] }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const result = await branchComparator.compare(args.branches);
+        return textResult(
+          `Compare ${result.branches.join(" vs ")}:\n` +
+          `  Total documents: ${result.stats.totalDocuments}\n` +
+          `  In all branches: ${result.stats.inAllBranches}\n` +
+          `  In some: ${result.stats.inSomeBranches}\n` +
+          `  Unique to one: ${result.stats.uniqueToOneBranch}`
+        );
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    // ── Stash Tools (Wave 7) ────────────────────────────────
+
+    async stash(args: { branchName: string; message: string }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const entry = await stashManager.stash(args.branchName, args.message);
+        return textResult(`Stashed "${entry.message}" on ${entry.branchName} (index ${entry.index})`);
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    async stash_pop(args: { branchName: string }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const entry = await stashManager.pop(args.branchName);
+        return textResult(`Popped stash "${entry.message}" — data restored on ${entry.branchName}`);
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    async stash_list(args: { branchName: string }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const entries = await stashManager.list(args.branchName);
+        if (entries.length === 0) return textResult("No stashes");
+        const lines = entries.map(e => `  stash@{${e.index}}: ${e.message} (${e.createdAt.toISOString()})`);
+        return textResult(`Stashes on ${args.branchName}:\n${lines.join("\n")}`);
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    // ── Anonymize (Wave 7) ──────────────────────────────────
+
+    async create_anonymized_branch(args: {
+      branchName: string;
+      rules: { collection: string; fields: { path: string; strategy: string }[] }[];
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const result = await anonymizeEngine.createAnonymizedBranch(args.branchName, args.rules as any);
+        return textResult(
+          `Anonymized branch "${result.branchName}" created.\n` +
+          `  Documents: ${result.documentsProcessed}, Fields: ${result.fieldsAnonymized}`
+        );
+      } catch (err: unknown) {
+        return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    // ── Reflog (Wave 7) ─────────────────────────────────────
+
+    async reflog(args: { branchName?: string; limit?: number }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const entries = args.branchName
+          ? await reflogManager.forBranch(args.branchName, args.limit ?? 50)
+          : await reflogManager.all(args.limit ?? 100);
+        if (entries.length === 0) return textResult("No reflog entries");
+        const lines = entries.map(e =>
+          `  ${e.timestamp.toISOString()} ${e.branchName} ${e.action}: ${e.detail}${e.commitHash ? ` (${e.commitHash.slice(0, 8)})` : ""}`
+        );
+        return textResult(`Reflog (${entries.length} entries):\n${lines.join("\n")}`);
       } catch (err: unknown) {
         return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
       }

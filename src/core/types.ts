@@ -292,7 +292,33 @@ export interface AgentStatusResult {
   lastActiveAt: Date;
 }
 
+// ── Agent Scope Types ────────────────────────────────────────
+
+export type ScopePermission = "read" | "write" | "delete" | "merge";
+
+export interface AgentScope {
+  agentId: string;
+  allowedCollections?: string[];      // null = all collections
+  deniedCollections?: string[];       // explicit deny (overrides allow)
+  permissions: ScopePermission[];     // what ops the agent can perform
+  maxBranches?: number;               // max simultaneous branches
+  maxDocumentsPerWrite?: number;      // per-op doc limit
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ScopeViolation {
+  agentId: string;
+  branchName: string;
+  collection: string;
+  operation: string;
+  reason: string;
+  timestamp: Date;
+}
+
 export const AGENTS_COLLECTION = "agents";
+export const AGENT_SCOPES_COLLECTION = "agent_scopes";
+export const SCOPE_VIOLATIONS_COLLECTION = "scope_violations";
 export const SNAPSHOTS_COLLECTION = "snapshots";
 export const MERGE_QUEUE_COLLECTION = "merge_queue";
 
