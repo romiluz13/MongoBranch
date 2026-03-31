@@ -55,27 +55,24 @@
 - New files: `src/core/protection.ts`, `src/core/hooks.ts`, `tests/core/lifecycle.test.ts`
 - 7 new MCP tools: `set_branch_ttl`, `reset_from_parent`, `protect_branch`, `list_protections`, `remove_protection`, `list_hooks`, `remove_hook` (total: 41 tools)
 
-### Next Up: Wave 6 — Time Travel & Audit (v0.9.0)
-- Phase 6.1: Time Travel (query branch state at any commit)
-- Phase 6.2: Blame (who changed what, when)
-- Phase 6.3: Deploy Requests (PR-like workflow for data changes)
+### 🎉 WAVE 6 COMPLETE — v0.9.0
+- **Phase 6.1**: Time Travel — `TimeTravelEngine.findAt()` (commit hash + timestamp), `listCollectionsAt()` — 5 tests
+- **Phase 6.2**: Blame — `TimeTravelEngine.blame()` field-level attribution — 2 tests
+- **Phase 6.3**: Deploy Requests — `DeployRequestManager` (open/approve/reject/execute/list/get) — 10 tests
+- New files: `src/core/timetravel.ts`, `src/core/deploy.ts`, `tests/core/timetravel.test.ts`, `tests/core/deploy.test.ts`
+- 7 new MCP tools: `time_travel_query`, `blame`, `open_deploy_request`, `approve_deploy_request`, `reject_deploy_request`, `execute_deploy_request`, `list_deploy_requests` (total: 48 tools)
+- Deep research: Dolt AS OF queries, Neon Time Travel (ephemeral branches), PlanetScale Deploy Requests
+- **198 tests, 0 failures, 595 assertions across 17 files**
+
+### Next Up: Wave 7 — Advanced Features (v1.0.0)
+- Scopes, Compare, Stash, Anonymize, Reflog
 
 ### Key Architecture Decisions Made
 - Three-way merge: 6-step process (Dolt-validated) — merge base via BFS, per-field conflicts
 - Hook execution: sync pre-hooks (fail-fast rejection), async post-hooks (lakeFS-validated)
-- PII anonymization: static masking on branch create, with path to dynamic (Neon-validated)
-
-### Key Architecture Decisions Pending
-- Commit snapshot format: full snapshot vs delta from parent?
-- Deploy request: store diff at creation vs compute on demand?
-
-### Full Audit Complete (2026-03-31)
-- **181 tests, 0 failures, 544 assertions across 15 files**
-- All source files verified: 12 in `src/core/`, 3 in `src/mcp/`, 1 CLI
-- All test files verified: 14 in `tests/core/`, 1 in `tests/mcp/`
-- Real Voyage AI embeddings verified: 512-dim vectors, semantic similarity correct
-- Roadmap checkboxes fixed: all Wave 5 sub-items now [x]
-- Deferred items documented: partial reset (Wave 7), webhooks (Wave 6)
+- Time travel: Snapshot-based (full document state stored per commit in `commit_data` collection)
+- Deploy requests: Diff stored at creation time (PlanetScale pattern), status flow: open → approved → merged/rejected
+- Blame: Backward commit walk with per-field change tracking, stops when all fields attributed
 
 > Living document — updated as we work. Read this FIRST at session start.
 

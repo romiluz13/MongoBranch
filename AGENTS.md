@@ -132,6 +132,8 @@ At the END of every prompt, BEFORE responding to the user:
 | `src/core/commit.ts` | CommitEngine class — content-addressed commits, SHA-256, parent chains, tags, cherry-pick, revert |
 | `src/core/protection.ts` | ProtectionManager class — branch protection rules, glob patterns |
 | `src/core/hooks.ts` | HookManager class — 14 event types, pre-reject/post-fire-and-forget |
+| `src/core/timetravel.ts` | TimeTravelEngine class — findAt, listCollectionsAt, blame |
+| `src/core/deploy.ts` | DeployRequestManager class — open/approve/reject/execute/list/get |
 | `src/core/types.ts` | TypeScript types, interfaces, config, constants |
 | `src/cli.ts` | Commander.js CLI entry point (`mb branch`, `mb commit` commands) |
 | `src/mcp/server.ts` | MCP Server — stdio transport, tool registration |
@@ -158,6 +160,8 @@ At the END of every prompt, BEFORE responding to the user:
 | `tests/core/stress.test.ts` | Stress tests — concurrent, large docs, queue, lazy CoW, lifecycle |
 | `tests/core/stress-ai.test.ts` | AI stress tests — real Voyage AI embeddings, sequential merge, hybrid search |
 | `tests/embedding.ts` | Voyage AI embedding helper — real API calls, cosine similarity |
+| `tests/core/timetravel.test.ts` | Time travel — findAt by commit/timestamp, listCollections, blame |
+| `tests/core/deploy.test.ts` | Deploy requests — open/approve/reject/execute/list/get |
 | `tests/mcp/server.test.ts` | MCP tools — create/list/diff/merge via tool handlers |
 
 ### 🐳 Infrastructure

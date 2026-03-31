@@ -294,7 +294,7 @@ and merge results — just like developers do with code in Git.
 > **Goal**: Query any point in history. Know who changed what and when.
 > **Competitive target**: Neon time-travel queries + Dolt blame + PlanetScale deploy requests
 
-### Phase 6.1: Time Travel Queries ⬜
+### Phase 6.1: Time Travel Queries ✅ COMPLETE
 > Query data at any past commit point. "What did the users collection look like yesterday?"
 > Neon's killer feature — we build it better because we have commits (they only have restore windows).
 
@@ -307,7 +307,7 @@ and merge results — just like developers do with code in Git.
 - [ ] CLI: `mb query <collection> --at <hash|timestamp> --filter '{}'`
 - [ ] Tests: 6+ TDD tests (query at commit, query at timestamp, query after modification, multi-collection)
 
-### Phase 6.2: Blame ⬜
+### Phase 6.2: Blame ✅ COMPLETE
 > Who changed which document/field and when? Follow the trail.
 > Dolt has `dolt_blame_<table>`. We build `blame(collection, documentId)`.
 
@@ -319,7 +319,7 @@ and merge results — just like developers do with code in Git.
 - [ ] CLI: `mb blame <collection> <documentId>`
 - [ ] Tests: 5+ TDD tests (single field, multi-field, created doc, deleted doc, across merges)
 
-### Phase 6.3: Deploy Requests ⬜
+### Phase 6.3: Deploy Requests ✅ COMPLETE
 > PR-like workflow for data changes. Agent proposes → human reviews diff → approves → merge executes.
 > PlanetScale pioneered this for schema changes. We build it for data + schema.
 
@@ -444,7 +444,7 @@ and merge results — just like developers do with code in Git.
 | 1-3 | v0.1–v0.5 | 8 engines, 25 MCP tools, CLI | 125 tests | ✅ Complete |
 | 4 | v0.7.0 | Commits ✅, Tags ✅, 3-way Merge ✅, Cherry-pick ✅, Revert ✅ | 33 tests | ✅ Complete |
 | 5 | v0.8.0 | TTL ✅, Reset ✅, Protection ✅, Hooks ✅ | 23 tests | ✅ Complete |
-| 6 | v0.9.0 | Time Travel, Blame, Deploy Requests | ~19 tests | ⬜ |
+| 6 | v0.9.0 | Time Travel, Blame, Deploy Requests | 17 tests | ✅ |
 | 7 | v1.0.0 | Scopes, Compare, Stash, Anonymize, Reflog | ~28 tests | ⬜ |
 | 8 | v1.1.0 | Atlas Search, npm, GitHub Actions, VS Code | ~10 tests | ⬜ |
 | **Total** | | **~40 features** | **~240 tests** | |
