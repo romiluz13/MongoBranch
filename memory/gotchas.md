@@ -2,6 +2,11 @@
 
 > Updated as we discover issues. Check before making assumptions.
 
+## Test Runner Gotcha
+- **Use `npx vitest run` NOT `bun test`** — `bun test` uses bun's built-in runner which only discovers 15/17 files
+- Test imports must use `import { ... } from "vitest"` NOT `from "bun:test"`
+- The `bun test` command silently skips files with vitest imports
+
 ## MongoDB Gotchas
 
 ### Change Streams Require Replica Set

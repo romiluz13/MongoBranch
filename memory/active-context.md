@@ -62,7 +62,11 @@
 - New files: `src/core/timetravel.ts`, `src/core/deploy.ts`, `tests/core/timetravel.test.ts`, `tests/core/deploy.test.ts`
 - 7 new MCP tools: `time_travel_query`, `blame`, `open_deploy_request`, `approve_deploy_request`, `reject_deploy_request`, `execute_deploy_request`, `list_deploy_requests` (total: 48 tools)
 - Deep research: Dolt AS OF queries, Neon Time Travel (ephemeral branches), PlanetScale Deploy Requests
-- **198 tests, 0 failures, 595 assertions across 17 files**
+- CLI: `mb query` (time travel), `mb blame`, `mb deploy create/list/approve/reject/execute`
+- Deploy requests fire pre-merge hooks (reject) + post-merge hooks (fire-and-forget)
+- Fixed blame `findCreationCommit` to check actual commit data, not just oldest commit
+- Fixed test imports: vitest instead of bun:test for proper discovery
+- **200+ tests, 0 failures, 17 test files — vitest run exit 0**
 
 ### Next Up: Wave 7 — Advanced Features (v1.0.0)
 - Scopes, Compare, Stash, Anonymize, Reflog

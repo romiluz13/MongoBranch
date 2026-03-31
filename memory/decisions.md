@@ -1,5 +1,12 @@
 # Architecture Decisions Log
 
+## 2026-03-31: Wave 6 Complete — Time Travel, Blame, Deploy Requests
+- **Time Travel**: Snapshot-based, full doc state per commit, query at commit hash or timestamp
+- **Blame**: Backward commit walk with per-field tracking, findCreationCommit checks actual data
+- **Deploy Requests**: PR-like flow (open→approve→execute), stores diff at creation, hook integration
+- **Test runner**: Use `npx vitest run` NOT `bun test` — vitest is the project's runner per package.json
+- **Hook integration in Deploy**: Pre-merge hooks can reject execute, post-merge hooks fire-and-forget
+
 > Record of every significant decision. Never delete entries — only append.
 
 ## ADR-001: Project Name — MongoBranch
