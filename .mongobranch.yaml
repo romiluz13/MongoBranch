@@ -1,0 +1,11 @@
+# MongoBranch Configuration
+# Override with env var: MONGOBRANCH_URI
+#
+# Default: docker compose up -d → localhost:27018
+# If running atlas-local on 27017, set:
+#   MONGOBRANCH_URI=mongodb://localhost:27017/?directConnection=true
+
+uri: "mongodb://localhost:27018/?directConnection=true"
+sourceDatabase: "ecommerce_app"
+metaDatabase: "__mongobranch"
+branchPrefix: "__mb_"

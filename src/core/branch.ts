@@ -33,7 +33,25 @@ export class BranchManager {
 
   async initialize(): Promise<void> {
     const col = this.metaDb.collection(META_COLLECTION);
-    await col.createIndex({ name: 1 }, { unique: true });
+
+    // Drop any old unique index on name that would block re-creation after delete.
+    // We use application-level checks for uniqueness instead.
+    try {
+      const indexes = await col.indexes();
+      for (const idx of indexes) {
+        const key = idx.key as Record<string, unknown> | undefined;
+        if (key?.name === 1 && (idx.unique || idx.partialFilterExpression)) {
+          await col.dropIndex(idx.name!).catch(() => {});
+        }
+      }
+    } catch {
+      // Collection may not exist yet — fine
+    }
+
+    // Non-unique index for fast lookups
+    await col.createIndex({ name: 1 }).catch(() => {
+      // Index may already exist — fine
+    });
   }
 
   getCurrentBranch(): string {
@@ -53,11 +71,28 @@ export class BranchManager {
       throw new Error(`Branch "${name}" already exists`);
     }
 
+    // Clean up old deleted records with the same name
+    await this.metaDb.collection(META_COLLECTION).deleteMany({ name, status: "deleted" });
+
     // Sanitize branch name for MongoDB database name (/ is invalid in DB names)
     const safeName = name.replace(/\//g, "--");
     const branchDatabase = `${this.config.branchPrefix}${safeName}`;
     const sourceDb = this.resolveDatabase(from);
     const branchDb = this.client.db(branchDatabase);
+
+    // Drop any leftover branch database from a previous (deleted) branch.
+    // Wait for async drop to complete — Atlas Local can be slow.
+    try {
+      await branchDb.dropDatabase();
+      // Wait for drop to propagate, then verify it's gone
+      for (let i = 0; i < 10; i++) {
+        const colls = await branchDb.listCollections().toArray();
+        if (colls.length === 0) break;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    } catch {
+      // Database may not exist — fine
+    }
 
     // Discover collections in source (exclude system collections)
     const collectionInfos = await sourceDb.listCollections().toArray();
