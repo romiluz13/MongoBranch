@@ -6,7 +6,7 @@
  *
  * TDD, real MongoDB, zero mocks.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { MongoClient } from "mongodb";
 import { startMongoDB, stopMongoDB } from "../setup.ts";
 import { BranchManager } from "../../src/core/branch.ts";
@@ -47,6 +47,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await client.db(config.metaDatabase).collection("branches").deleteMany({});
   await client.db(config.metaDatabase).collection("deploy_requests").deleteMany({});
+  await client.db(config.metaDatabase).collection("hooks").deleteMany({});
 
   // Seed source DB
   const sourceDb = client.db(config.sourceDatabase);

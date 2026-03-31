@@ -444,6 +444,7 @@ export interface DeployRequest {
   reviewedBy?: string;
   rejectionReason?: string;
   mergedAt?: Date;
+  isTargetProtected?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

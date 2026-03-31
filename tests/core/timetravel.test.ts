@@ -6,7 +6,7 @@
  *
  * TDD, real MongoDB, zero mocks.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { MongoClient } from "mongodb";
 import { startMongoDB, stopMongoDB } from "../setup.ts";
 import { BranchManager } from "../../src/core/branch.ts";
@@ -230,5 +230,61 @@ describe("Blame — who changed what and when", () => {
     // Bob's name and role should be attributed to the initial commit
     expect(result.fields.name).toBeDefined();
     expect(result.fields.name[0].commitHash).toBe(commit1.hash);
+  });
+
+  it("tracks multiple changes to the same field across commits", async () => {
+    const branch = await branchManager.createBranch({ name: "blame-multi" });
+    const branchDb = client.db(branch.branchDatabase);
+
+    // Seed has score: 100. Commit initial state.
+    await commitEngine.commit({ branchName: "blame-multi", message: "Initial", author: "alice" });
+
+    const doc = await branchDb.collection("users").findOne({ name: "Alice" });
+    const docId = doc!._id.toString();
+
+    // Change score 3 times by 3 different authors (each different from seed value)
+    await branchDb.collection("users").updateOne({ name: "Alice" }, { $set: { score: 500 } });
+    await commitEngine.commit({ branchName: "blame-multi", message: "Score 500", author: "bob" });
+
+    await branchDb.collection("users").updateOne({ name: "Alice" }, { $set: { score: 700 } });
+    await commitEngine.commit({ branchName: "blame-multi", message: "Score 700", author: "charlie" });
+
+    await branchDb.collection("users").updateOne({ name: "Alice" }, { $set: { score: 999 } });
+    await commitEngine.commit({ branchName: "blame-multi", message: "Score 999", author: "dave" });
+
+    const result = await timeTravelEngine.blame("blame-multi", "users", docId);
+
+    // Score field should have 3 history entries (each change recorded)
+    expect(result.fields.score).toBeDefined();
+    expect(result.fields.score.length).toBeGreaterThanOrEqual(3);
+
+    // Most recent should be dave's change
+    const latest = result.fields.score.find(e => e.value === 999);
+    expect(latest).toBeDefined();
+    expect(latest!.author).toBe("dave");
+  });
+
+  it("blames a newly added document to its first commit", async () => {
+    const branch = await branchManager.createBranch({ name: "blame-new" });
+    const branchDb = client.db(branch.branchDatabase);
+
+    await commitEngine.commit({ branchName: "blame-new", message: "Before insert", author: "alice" });
+
+    // Insert a brand new document
+    const insertResult = await branchDb.collection("users").insertOne({
+      name: "NewUser",
+      role: "guest",
+      score: 0,
+    });
+    const newId = insertResult.insertedId.toString();
+
+    const commit2 = await commitEngine.commit({ branchName: "blame-new", message: "Added NewUser", author: "bob" });
+
+    const result = await timeTravelEngine.blame("blame-new", "users", newId);
+
+    // All fields should be attributed to bob's commit
+    expect(result.fields.name).toBeDefined();
+    expect(result.fields.name[0].author).toBe("bob");
+    expect(result.fields.role[0].value).toBe("guest");
   });
 });

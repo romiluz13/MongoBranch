@@ -298,44 +298,44 @@ and merge results — just like developers do with code in Git.
 > Query data at any past commit point. "What did the users collection look like yesterday?"
 > Neon's killer feature — we build it better because we have commits (they only have restore windows).
 
-- [ ] `findAt(branchName, collection, filter, commitHash)` — query at a specific commit
-- [ ] `findAt(branchName, collection, filter, timestamp)` — query at a point in time
-- [ ] Implementation: replay commit chain from target commit to build point-in-time snapshot
-- [ ] Optimization: cache recent snapshots, lazy rebuild for old commits
-- [ ] Return data in same format as `branch_find` (transparent to agents)
-- [ ] MCP tool: `time_travel_query` (branch, collection, filter, at: commitHash | timestamp)
-- [ ] CLI: `mb query <collection> --at <hash|timestamp> --filter '{}'`
-- [ ] Tests: 6+ TDD tests (query at commit, query at timestamp, query after modification, multi-collection)
+- [x] `findAt(branchName, collection, filter, commitHash)` — query at a specific commit
+- [x] `findAt(branchName, collection, filter, timestamp)` — query at a point in time
+- [x] Implementation: snapshot-based — full document state stored per commit in `commit_data`
+- [ ] Optimization: cache recent snapshots, lazy rebuild for old commits *(deferred)*
+- [x] Return data in same format as `branch_find` (transparent to agents)
+- [x] MCP tool: `time_travel_query` (branch, collection, filter, at: commitHash | timestamp)
+- [x] CLI: `mb query <branch> <collection> --at <hash> --timestamp <iso> --filter '{}'`
+- [x] Tests: 5 TDD tests (query at commit, query at timestamp, query after modification, no-filter, multi-collection)
 
 ### Phase 6.2: Blame ✅ COMPLETE
 > Who changed which document/field and when? Follow the trail.
 > Dolt has `dolt_blame_<table>`. We build `blame(collection, documentId)`.
 
-- [ ] `blame(branchName, collection, documentId)` — returns change history per field
-- [ ] Blame output: `{ field: [{ value, commitHash, author, timestamp }] }`
-- [ ] Walk commit chain backward, tracking per-field changes
-- [ ] Optimization: stop walking when all fields have been attributed
-- [ ] MCP tool: `blame`
-- [ ] CLI: `mb blame <collection> <documentId>`
-- [ ] Tests: 5+ TDD tests (single field, multi-field, created doc, deleted doc, across merges)
+- [x] `blame(branchName, collection, documentId)` — returns change history per field
+- [x] Blame output: `{ field: [{ value, commitHash, author, timestamp }] }`
+- [x] Walk commit chain backward, tracking per-field changes
+- [x] Optimization: stop walking when all fields have been attributed
+- [x] MCP tool: `blame`
+- [x] CLI: `mb blame <branch> <collection> <documentId>`
+- [x] Tests: 4 TDD tests (multi-field, unchanged doc, multi-change same field, new doc blame)
 
 ### Phase 6.3: Deploy Requests ✅ COMPLETE
 > PR-like workflow for data changes. Agent proposes → human reviews diff → approves → merge executes.
 > PlanetScale pioneered this for schema changes. We build it for data + schema.
 
-- [ ] `DeployRequest` type: `{ id, sourceBranch, targetBranch, status, diff, createdBy, reviewedBy, createdAt }`
-- [ ] Status flow: `open` → `approved` | `rejected` | `merged`
-- [ ] `createDeployRequest(source, target, description)` — opens a request with auto-diff
-- [ ] `approveDeployRequest(id, reviewedBy)` — marks as approved
-- [ ] `executeDeployRequest(id)` — runs the merge (only if approved)
-- [ ] `rejectDeployRequest(id, reason)` — rejects with reason
-- [ ] Deploy request stores the diff snapshot at creation time
-- [ ] Integration with hooks — pre-merge hooks run on execute
-- [ ] Integration with protection — protected branches require deploy requests
-- [ ] Stored in `__mongobranch.deploy_requests` collection
-- [ ] MCP tools: `create_deploy_request`, `approve_deploy_request`, `execute_deploy_request`, `reject_deploy_request`, `list_deploy_requests`
-- [ ] CLI: `mb deploy create`, `mb deploy list`, `mb deploy approve <id>`, `mb deploy execute <id>`
-- [ ] Tests: 8+ TDD tests (create, approve, execute, reject, diff snapshot, protection enforcement)
+- [x] `DeployRequest` type: `{ id, sourceBranch, targetBranch, status, diff, createdBy, reviewedBy, createdAt }`
+- [x] Status flow: `open` → `approved` | `rejected` | `merged`
+- [x] `open(source, target, description)` — opens a request with auto-diff
+- [x] `approve(id, reviewedBy)` — marks as approved
+- [x] `execute(id)` — runs the merge (only if approved)
+- [x] `reject(id, reason)` — rejects with reason
+- [x] Deploy request stores the diff snapshot at creation time
+- [x] Integration with hooks — pre-merge hooks run on execute, post-merge fire-and-forget
+- [x] Integration with protection — `isTargetProtected` flag on deploy request
+- [x] Stored in `__mongobranch.deploy_requests` collection
+- [x] MCP tools: `open_deploy_request`, `approve_deploy_request`, `execute_deploy_request`, `reject_deploy_request`, `list_deploy_requests`
+- [x] CLI: `mb deploy create`, `mb deploy list`, `mb deploy approve <id>`, `mb deploy reject <id>`, `mb deploy execute <id>`
+- [x] Tests: 10 TDD tests (create, duplicate prevention, missing branch, approve, reject, state validation, execute, merge verify, list filtering, get by ID)
 
 ---
 

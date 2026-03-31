@@ -16,6 +16,8 @@ import { DiffEngine } from "./core/diff.ts";
 import { MergeEngine } from "./core/merge.ts";
 import { HistoryManager } from "./core/history.ts";
 import { CommitEngine } from "./core/commit.ts";
+import { TimeTravelEngine } from "./core/timetravel.ts";
+import { DeployRequestManager } from "./core/deploy.ts";
 import type { MongoBranchConfig } from "./core/types.ts";
 import { DEFAULT_CONFIG } from "./core/types.ts";
 
@@ -506,6 +508,167 @@ program
     } finally {
       await client.close();
     }
+  });
+
+// ── Helper for client-only commands ──────────────────────────
+
+async function withClient<T>(fn: (client: MongoClient, config: MongoBranchConfig) => Promise<T>): Promise<T> {
+  const config = loadConfig();
+  const client = new MongoClient(config.uri);
+  try {
+    await client.connect();
+    return await fn(client, config);
+  } finally {
+    await client.close();
+  }
+}
+
+// ── Time Travel Command (Wave 6) ───────────────────────────
+
+program
+  .command("query <branch> <collection>")
+  .description("Query data at a specific commit or timestamp (time travel)")
+  .option("--at <commitHash>", "Commit hash to query at")
+  .option("--timestamp <iso>", "ISO timestamp to query at")
+  .option("--filter <json>", "MongoDB query filter as JSON")
+  .action(async (branch: string, collection: string, opts) => {
+    await withClient(async (client, config) => {
+      const engine = new TimeTravelEngine(client, config);
+      await engine.initialize();
+      const docs = await engine.findAt({
+        branchName: branch,
+        collection,
+        commitHash: opts.at,
+        timestamp: opts.timestamp ? new Date(opts.timestamp) : undefined,
+        filter: opts.filter ? JSON.parse(opts.filter) : undefined,
+      });
+      console.log(chalk.bold(`\n📜 Time Travel: ${branch}/${collection} (${docs.length} documents)\n`));
+      for (const doc of docs) {
+        console.log(chalk.dim(`  ${JSON.stringify(doc, null, 0).slice(0, 120)}`));
+      }
+      console.log();
+    });
+  });
+
+// ── Blame Command (Wave 6) ─────────────────────────────────
+
+program
+  .command("blame <branch> <collection> <documentId>")
+  .description("Show who changed each field of a document and when")
+  .action(async (branch: string, collection: string, documentId: string) => {
+    await withClient(async (client, config) => {
+      const engine = new TimeTravelEngine(client, config);
+      await engine.initialize();
+      const result = await engine.blame(branch, collection, documentId);
+      console.log(chalk.bold(`\n🔍 Blame: ${collection}/${documentId}\n`));
+      for (const [field, info] of Object.entries(result.fields)) {
+        console.log(
+          `  ${chalk.cyan(field)}  `,
+          chalk.yellow(info.commitHash.slice(0, 8)),
+          chalk.dim(`${info.author} · "${info.message}" · ${info.timestamp.toISOString()}`)
+        );
+      }
+      console.log();
+    });
+  });
+
+// ── Deploy Request Commands (Wave 6) ────────────────────────
+
+const deployCmd = program
+  .command("deploy")
+  .description("Manage deploy requests — PR-like workflow for data changes");
+
+deployCmd
+  .command("create")
+  .description("Open a deploy request (propose merging source → target)")
+  .requiredOption("--source <branch>", "Source branch with changes")
+  .requiredOption("--target <branch>", "Target branch to merge into")
+  .requiredOption("-m, --message <text>", "What this deploy request does")
+  .option("--by <name>", "Who is opening this request")
+  .action(async (opts) => {
+    await withClient(async (client, config) => {
+      const mgr = new DeployRequestManager(client, config);
+      await mgr.initialize();
+      const dr = await mgr.open({
+        sourceBranch: opts.source,
+        targetBranch: opts.target,
+        description: opts.message,
+        createdBy: opts.by ?? "cli",
+      });
+      console.log(chalk.green(`✅ Deploy request #${dr.id} opened`));
+      console.log(chalk.dim(`   ${dr.sourceBranch} → ${dr.targetBranch}`));
+      console.log(chalk.dim(`   ${dr.description}`));
+    });
+  });
+
+deployCmd
+  .command("list")
+  .description("List deploy requests")
+  .option("--status <status>", "Filter: open, approved, rejected, merged")
+  .option("--target <branch>", "Filter by target branch")
+  .action(async (opts) => {
+    await withClient(async (client, config) => {
+      const mgr = new DeployRequestManager(client, config);
+      await mgr.initialize();
+      const drs = await mgr.list({
+        status: opts.status as any,
+        targetBranch: opts.target,
+      });
+      if (drs.length === 0) {
+        console.log(chalk.dim("No deploy requests found"));
+        return;
+      }
+      console.log(chalk.bold(`\n🚦 Deploy Requests (${drs.length}):\n`));
+      for (const dr of drs) {
+        const statusColor = dr.status === "open" ? chalk.blue :
+                           dr.status === "approved" ? chalk.green :
+                           dr.status === "rejected" ? chalk.red : chalk.yellow;
+        console.log(`  ${chalk.bold(`#${dr.id}`)} ${statusColor(`[${dr.status}]`)} ${dr.sourceBranch} → ${dr.targetBranch}`);
+        console.log(chalk.dim(`    ${dr.description} (${dr.createdBy})`));
+      }
+      console.log();
+    });
+  });
+
+deployCmd
+  .command("approve <id>")
+  .description("Approve a deploy request")
+  .option("--by <name>", "Reviewer name")
+  .action(async (id: string, opts) => {
+    await withClient(async (client, config) => {
+      const mgr = new DeployRequestManager(client, config);
+      await mgr.initialize();
+      const dr = await mgr.approve(id, opts.by ?? "cli");
+      console.log(chalk.green(`✅ Deploy request #${dr.id} approved by ${dr.reviewedBy}`));
+    });
+  });
+
+deployCmd
+  .command("reject <id>")
+  .description("Reject a deploy request")
+  .requiredOption("-r, --reason <text>", "Rejection reason")
+  .option("--by <name>", "Reviewer name")
+  .action(async (id: string, opts) => {
+    await withClient(async (client, config) => {
+      const mgr = new DeployRequestManager(client, config);
+      await mgr.initialize();
+      const dr = await mgr.reject(id, opts.by ?? "cli", opts.reason);
+      console.log(chalk.red(`❌ Deploy request #${dr.id} rejected: ${dr.rejectionReason}`));
+    });
+  });
+
+deployCmd
+  .command("execute <id>")
+  .description("Execute an approved deploy request (performs the merge)")
+  .action(async (id: string) => {
+    await withClient(async (client, config) => {
+      const mgr = new DeployRequestManager(client, config);
+      await mgr.initialize();
+      const { deployRequest, mergeResult } = await mgr.execute(id);
+      console.log(chalk.green(`✅ Deploy request #${deployRequest.id} executed!`));
+      console.log(chalk.dim(`   Merged: ${mergeResult.sourceBranch} → ${mergeResult.targetBranch}`));
+      console.log(chalk.dim(`   +${mergeResult.documentsAdded} added, -${mergeResult.documentsRemoved} removed, ~${mergeResult.documentsModified} modified`));
+    });
   });
 
 program.parseAsync().catch((err) => {

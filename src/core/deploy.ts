@@ -18,6 +18,8 @@ import type {
 } from "./types.ts";
 import { MergeEngine } from "./merge.ts";
 import { DiffEngine } from "./diff.ts";
+import { ProtectionManager } from "./protection.ts";
+import { HookManager } from "./hooks.ts";
 
 const DEPLOY_REQUESTS_COLLECTION = "deploy_requests";
 
@@ -27,6 +29,8 @@ export class DeployRequestManager {
   private requests: Collection<DeployRequest>;
   private mergeEngine: MergeEngine;
   private diffEngine: DiffEngine;
+  private protectionManager: ProtectionManager;
+  private hookManager: HookManager;
 
   constructor(client: MongoClient, config: MongoBranchConfig) {
     this.client = client;
@@ -35,12 +39,16 @@ export class DeployRequestManager {
     this.requests = metaDb.collection<DeployRequest>(DEPLOY_REQUESTS_COLLECTION);
     this.mergeEngine = new MergeEngine(client, config);
     this.diffEngine = new DiffEngine(client, config);
+    this.protectionManager = new ProtectionManager(client, config);
+    this.hookManager = new HookManager(client, config);
   }
 
   async initialize(): Promise<void> {
     await this.requests.createIndex({ id: 1 }, { unique: true });
     await this.requests.createIndex({ status: 1 });
     await this.requests.createIndex({ sourceBranch: 1, targetBranch: 1 });
+    await this.protectionManager.initialize();
+    await this.hookManager.initialize();
   }
 
   /**
@@ -79,6 +87,9 @@ export class DeployRequestManager {
       );
     }
 
+    // Note if target is protected — deploy request is the correct workflow
+    const isTargetProtected = await this.protectionManager.isProtected(targetBranch);
+
     // Compute diff
     let diff: DiffResult | undefined;
     try {
@@ -99,6 +110,7 @@ export class DeployRequestManager {
       createdBy,
       createdAt: now,
       updatedAt: now,
+      isTargetProtected,
     };
 
     await this.requests.insertOne(dr);
@@ -154,6 +166,13 @@ export class DeployRequestManager {
       throw new Error(`Cannot execute deploy request in "${dr.status}" state — must be approved`);
     }
 
+    // Fire pre-merge hooks (can reject)
+    const preCtx = HookManager.createContext("pre-merge", dr.sourceBranch, dr.createdBy);
+    const preResult = await this.hookManager.executePreHooks(preCtx);
+    if (!preResult.allow) {
+      throw new Error(`Pre-merge hook rejected: ${preResult.reason ?? "unknown"}`);
+    }
+
     // Perform the merge
     const mergeResult = await this.mergeEngine.merge(dr.sourceBranch, dr.targetBranch);
 
@@ -161,6 +180,10 @@ export class DeployRequestManager {
     await this.requests.updateOne({ id }, {
       $set: { status: "merged", mergedAt: now, updatedAt: now },
     });
+
+    // Fire post-merge hooks (fire-and-forget)
+    const postCtx = HookManager.createContext("post-merge", dr.sourceBranch, dr.createdBy);
+    this.hookManager.executePostHooks(postCtx).catch(() => {}); // post-hooks don't block
 
     return {
       deployRequest: { ...dr, status: "merged", mergedAt: now },

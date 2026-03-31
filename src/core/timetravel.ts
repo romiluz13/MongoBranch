@@ -201,7 +201,7 @@ export class TimeTravelEngine {
 
     // For fields that were never changed (set at creation), attribute to first commit
     if (previousDoc) {
-      const firstCommitWithDoc = this.findCreationCommit(commitChain, previousDoc);
+      const firstCommitWithDoc = await this.findCreationCommit(commitChain, previousDoc, collection, documentId);
       if (firstCommitWithDoc) {
         for (const key of Object.keys(previousDoc)) {
           if (key === "_id") continue;
@@ -230,8 +230,27 @@ export class TimeTravelEngine {
 
   // ── Private Helpers ──────────────────────────────────────
 
-  private findCreationCommit(chain: Commit[], _doc: Record<string, unknown>): Commit | null {
-    // The oldest commit in the chain that has data for this doc
+  private async findCreationCommit(
+    chain: Commit[],
+    doc: Record<string, unknown>,
+    collection: string,
+    documentId: string,
+  ): Promise<Commit | null> {
+    // Walk from oldest to newest, find the first commit that contains the doc
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const commit = chain[i];
+      const snapshot = await this.commitData.findOne({
+        commitHash: commit.hash,
+        collection,
+      });
+      if (snapshot) {
+        const found = snapshot.documents.find(
+          (d: Record<string, unknown>) => String((d as any)._id) === String(documentId)
+        );
+        if (found) return commit;
+      }
+    }
+    // Fallback to oldest commit
     return chain[chain.length - 1] ?? null;
   }
 

@@ -4,7 +4,7 @@
 
 ### Git for your MongoDB data — branch, commit, diff, merge, time-travel
 
-[![Tests](https://img.shields.io/badge/tests-198%20passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-200%2B%20passing-brightgreen)]()
 [![MongoDB](https://img.shields.io/badge/MongoDB-7.x-47A248?logo=mongodb&logoColor=white)]()
 [![MCP Tools](https://img.shields.io/badge/MCP%20tools-48-blue)]()
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)]()
