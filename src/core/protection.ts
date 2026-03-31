@@ -101,14 +101,16 @@ export class ProtectionManager {
 
   /**
    * Simple glob matching — supports "*" as wildcard.
+   * Escapes all regex metacharacters before converting * → .*
+   * to prevent patterns like "prod.v1" from matching "prodXv1".
    */
   private matchesPattern(name: string, pattern: string): boolean {
     if (pattern === name) return true;
     if (!pattern.includes("*")) return false;
 
-    const regex = new RegExp(
-      "^" + pattern.replace(/\*/g, ".*") + "$"
-    );
+    // Escape regex metacharacters, then convert glob * to regex .*
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp("^" + escaped.replace(/\*/g, ".*") + "$");
     return regex.test(name);
   }
 }

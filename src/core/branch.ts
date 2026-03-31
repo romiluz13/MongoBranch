@@ -34,22 +34,41 @@ export class BranchManager {
   async initialize(): Promise<void> {
     const col = this.metaDb.collection(META_COLLECTION);
 
-    // Drop any old unique index on name that would block re-creation after delete.
-    // We use application-level checks for uniqueness instead.
+    // Migrate: drop any old-style unique index on name (without partial filter)
+    // that blocks re-creation of deleted branches.
     try {
       const indexes = await col.indexes();
       for (const idx of indexes) {
         const key = idx.key as Record<string, unknown> | undefined;
-        if (key?.name === 1 && (idx.unique || idx.partialFilterExpression)) {
-          await col.dropIndex(idx.name!).catch(() => {});
+        if (key?.name === 1 && idx.unique) {
+          // Check if it's the old non-partial index OR a stale partial index
+          const pf = idx.partialFilterExpression as Record<string, unknown> | undefined;
+          const isOldStyle = !pf;
+          const isStalePartial = pf && JSON.stringify(pf) !== JSON.stringify({ status: "active" });
+          if (isOldStyle || isStalePartial) {
+            await col.dropIndex(idx.name!).catch(() => {});
+          }
         }
       }
     } catch {
       // Collection may not exist yet — fine
     }
 
-    // Non-unique index for fast lookups
-    await col.createIndex({ name: 1 }).catch(() => {
+    // Partial unique index: only enforce uniqueness for active branches.
+    // Deleted/merged branches don't block re-creation of the same name.
+    await col.createIndex(
+      { name: 1 },
+      { unique: true, partialFilterExpression: { status: "active" } }
+    ).catch(() => {
+      // Index may already exist with correct definition — fine
+    });
+
+    // TTL index: automatically expire branches based on expiresAt field.
+    // MongoDB's background thread deletes expired documents every 60 seconds.
+    await col.createIndex(
+      { expiresAt: 1 },
+      { expireAfterSeconds: 0 }
+    ).catch(() => {
       // Index may already exist — fine
     });
   }
@@ -415,11 +434,22 @@ export class BranchManager {
       .map((c) => c.name);
 
     let documentsRestored = 0;
+    const BATCH_SIZE = 1000;
     for (const collName of collections) {
-      const docs = await sourceDb.collection(collName).find({}).toArray();
-      if (docs.length > 0) {
-        await branchDb.collection(collName).insertMany(docs);
-        documentsRestored += docs.length;
+      // Batched cursor iteration to avoid memory issues
+      const cursor = sourceDb.collection(collName).find({}).batchSize(BATCH_SIZE);
+      let batch: Record<string, unknown>[] = [];
+      for await (const doc of cursor) {
+        batch.push(doc as Record<string, unknown>);
+        if (batch.length >= BATCH_SIZE) {
+          await branchDb.collection(collName).insertMany(batch);
+          documentsRestored += batch.length;
+          batch = [];
+        }
+      }
+      if (batch.length > 0) {
+        await branchDb.collection(collName).insertMany(batch);
+        documentsRestored += batch.length;
       }
       // Copy indexes
       const indexes = await sourceDb.collection(collName).indexes();
@@ -466,15 +496,33 @@ export class BranchManager {
     return this.client.db(`${this.config.branchPrefix}${branchName}`);
   }
 
+  /**
+   * Copy collections from source to target using batched cursor iteration.
+   * Avoids loading entire collections into memory at once.
+   */
   private async copyCollections(
     sourceDb: Db,
     targetDb: Db,
     collections: string[]
   ): Promise<void> {
+    const BATCH_SIZE = 1000;
+
     for (const collName of collections) {
-      const docs = await sourceDb.collection(collName).find({}).toArray();
-      if (docs.length > 0) {
-        await targetDb.collection(collName).insertMany(docs);
+      // Use cursor-based batching to avoid memory issues with large collections
+      const cursor = sourceDb.collection(collName).find({}).batchSize(BATCH_SIZE);
+      let batch: Record<string, unknown>[] = [];
+
+      for await (const doc of cursor) {
+        batch.push(doc as Record<string, unknown>);
+        if (batch.length >= BATCH_SIZE) {
+          await targetDb.collection(collName).insertMany(batch);
+          batch = [];
+        }
+      }
+
+      // Insert any remaining docs
+      if (batch.length > 0) {
+        await targetDb.collection(collName).insertMany(batch);
       }
 
       // Copy indexes (except default _id index)
@@ -483,11 +531,10 @@ export class BranchManager {
         if (idx.name === "_id_") continue;
         const { key, ...options } = idx;
         try {
-          // v is internal, remove before creating
           const { v, ...cleanOptions } = options as Record<string, unknown>;
           await targetDb.collection(collName).createIndex(key, cleanOptions);
         } catch {
-          // Index creation may fail for some types — log but don't block
+          // Index creation may fail for some types — skip
         }
       }
     }

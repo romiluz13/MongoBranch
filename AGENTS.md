@@ -55,7 +55,7 @@ At the END of every prompt, BEFORE responding to the user:
 - **Language**: TypeScript (strict mode)
 - **Runtime**: Bun (NOT Node.js — use `bun` for everything)
 - **Testing**: Vitest via `bun test` — real MongoDB only, ZERO mocks
-- **Local MongoDB**: `docker compose up -d` → Atlas Local preview on port 27018
+- **Local MongoDB**: `docker compose up -d` → Atlas Local preview on port 27017
 - **Files**: Max 200 lines for components, 400 lines for services
 - **Source**: All code in `src/`
 - **Tests**: All tests in `tests/`
@@ -149,7 +149,7 @@ At the END of every prompt, BEFORE responding to the user:
 ### 🧪 Tests (TDD, real MongoDB, zero mocks)
 | File | Purpose |
 |------|---------|
-| `tests/setup.ts` | MongoDB connection — Atlas Local Docker (port 27018) / fallback |
+| `tests/setup.ts` | MongoDB connection — Atlas Local Docker (port 27017) / fallback |
 | `tests/seed.ts` | Realistic ecommerce data (users, products, orders) |
 | `tests/core/branch.test.ts` | Branch create, validate, metadata, list tests |
 | `tests/core/branch-operations.test.ts` | Switch, delete, data isolation tests |
@@ -179,7 +179,7 @@ At the END of every prompt, BEFORE responding to the user:
 ### 🐳 Infrastructure
 | File | Purpose |
 |------|---------|
-| `docker-compose.yml` | Atlas Local preview on port 27018 |
+| `docker-compose.yml` | Atlas Local preview on port 27017 |
 | `.github/workflows/ci.yml` | GitHub Actions CI — lint + test with Atlas Local Docker |
 | `package.json` | Project config — mongobranch v0.1.0 |
 | `tsconfig.json` | TypeScript strict config |

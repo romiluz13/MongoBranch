@@ -3,7 +3,7 @@
  *
  * Priority:
  *   1. MONGOBRANCH_TEST_URI env var (explicit connection)
- *   2. Atlas Local Docker on localhost:27018 (docker compose up)
+ *   2. Atlas Local Docker on localhost:27017 (docker compose up)
  *   3. Fallback: mongodb-memory-server (auto-download mongod binary)
  *
  * NO MOCKS. Every test hits a real MongoDB instance with real data.
@@ -22,7 +22,7 @@ let currentUri: string | null = null;
 let usingAtlasLocal = false;
 
 /**
- * Try to connect to Atlas Local Docker on localhost:27018.
+ * Try to connect to Atlas Local Docker.
  * Returns true if connection succeeded.
  */
 async function tryAtlasLocal(uri: string): Promise<boolean> {
@@ -47,8 +47,8 @@ async function tryAtlasLocal(uri: string): Promise<boolean> {
  *
  * Connection priority:
  *   1. MONGOBRANCH_TEST_URI or MONGODB_URI env var
- *   2. Atlas Local Docker on port 27018 (docker compose up — our docker-compose.yml)
- *   3. Atlas Local Docker on port 27017 (standalone atlas-local:preview container)
+ *   2. Atlas Local Docker on port 27017 (docker compose up — default MongoDB port)
+ *   3. Atlas Local Docker on port 27018 (legacy config or custom setups)
  *   4. Fallback: mongodb-memory-server (auto-download mongod binary)
  */
 export async function startMongoDB(): Promise<{ uri: string; client: MongoClient }> {
@@ -63,18 +63,7 @@ export async function startMongoDB(): Promise<{ uri: string; client: MongoClient
     return { uri: explicitUri, client };
   }
 
-  // 2. Try Atlas Local Docker on port 27018 (our docker-compose.yml maps 27018→27017)
-  const atlasLocal27018 = "mongodb://localhost:27018/?directConnection=true";
-  if (await tryAtlasLocal(atlasLocal27018)) {
-    client = new MongoClient(atlasLocal27018);
-    await client.connect();
-    usingAtlasLocal = true;
-    currentUri = atlasLocal27018;
-    console.log(`  ✅ Connected to Atlas Local Docker (localhost:27018)`);
-    return { uri: atlasLocal27018, client };
-  }
-
-  // 3. Try Atlas Local Docker on port 27017 (standalone container, e.g. atlas-local:preview)
+  // 2. Try Atlas Local Docker on port 27017 (MongoDB default — docker compose up)
   const atlasLocal27017 = "mongodb://localhost:27017/?directConnection=true";
   if (await tryAtlasLocal(atlasLocal27017)) {
     client = new MongoClient(atlasLocal27017);
@@ -83,6 +72,17 @@ export async function startMongoDB(): Promise<{ uri: string; client: MongoClient
     currentUri = atlasLocal27017;
     console.log(`  ✅ Connected to Atlas Local Docker (localhost:27017)`);
     return { uri: atlasLocal27017, client };
+  }
+
+  // 3. Try fallback port 27018 (legacy config or custom setups)
+  const atlasLocal27018 = "mongodb://localhost:27018/?directConnection=true";
+  if (await tryAtlasLocal(atlasLocal27018)) {
+    client = new MongoClient(atlasLocal27018);
+    await client.connect();
+    usingAtlasLocal = true;
+    currentUri = atlasLocal27018;
+    console.log(`  ✅ Connected to Atlas Local Docker (localhost:27018)`);
+    return { uri: atlasLocal27018, client };
   }
 
   // 4. Fallback: mongodb-memory-server

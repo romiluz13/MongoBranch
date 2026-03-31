@@ -5,7 +5,7 @@
 import { MongoClient } from "mongodb";
 import { SEED_COLLECTIONS, SEED_DATABASE } from "./tests/seed.ts";
 
-const uri = process.env.MONGOBRANCH_URI ?? process.env.MONGODB_URI ?? "mongodb://localhost:27018/?directConnection=true";
+const uri = process.env.MONGOBRANCH_URI ?? process.env.MONGODB_URI ?? "mongodb://localhost:27017/?directConnection=true";
 
 async function main() {
   const client = new MongoClient(uri);

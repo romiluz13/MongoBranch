@@ -62,7 +62,7 @@ export interface MongoBranchConfig {
 }
 
 export const DEFAULT_CONFIG: MongoBranchConfig = {
-  uri: "mongodb://localhost:27018/?directConnection=true",
+  uri: "mongodb://localhost:27017/?directConnection=true",
   sourceDatabase: "myapp",
   metaDatabase: "__mongobranch",
   branchPrefix: "__mb_",

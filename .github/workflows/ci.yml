@@ -30,9 +30,9 @@ jobs:
       atlas-local:
         image: mongodb/mongodb-atlas-local:8.0
         ports:
-          - 27018:27017
+          - 27017:27017
     env:
-      MONGODB_URI: mongodb://localhost:27018/?directConnection=true
+      MONGODB_URI: mongodb://localhost:27017/?directConnection=true
       ATLAS_LOCAL: "true"
     steps:
       - uses: actions/checkout@v4
@@ -43,7 +43,7 @@ jobs:
       - name: Wait for Atlas Local
         run: |
           for i in $(seq 1 30); do
-            if bun -e "const { MongoClient } = require('mongodb'); const c = new MongoClient('mongodb://localhost:27018/?directConnection=true'); c.connect().then(() => { console.log('connected'); c.close(); process.exit(0); }).catch(() => process.exit(1));" 2>/dev/null; then
+            if bun -e "const { MongoClient } = require('mongodb'); const c = new MongoClient('mongodb://localhost:27017/?directConnection=true'); c.connect().then(() => { console.log('connected'); c.close(); process.exit(0); }).catch(() => process.exit(1));" 2>/dev/null; then
               echo "Atlas Local is ready"
               break
             fi

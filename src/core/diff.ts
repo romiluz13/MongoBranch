@@ -429,6 +429,11 @@ export class DiffEngine {
     }
   }
 
+  /**
+   * Build a document map for diffing. Loads all docs into memory.
+   * For very large collections (100K+ docs), consider using streaming
+   * comparison or sampling strategies instead.
+   */
   private async buildDocMap(coll: { find: Function }): Promise<Map<string, Record<string, unknown>>> {
     const docs = await coll.find({}).toArray();
     const map = new Map<string, Record<string, unknown>>();
