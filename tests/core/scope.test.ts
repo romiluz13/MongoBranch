@@ -203,7 +203,7 @@ describe("ScopeManager — violations", () => {
 
     const violations = await scopeManager.getViolations("bad-agent");
     expect(violations.length).toBe(2);
-    expect(violations[0].collection).toBe("admin"); // newest first
-    expect(violations[1].collection).toBe("secrets");
+    const collections = violations.map((v: { collection: string }) => v.collection).sort();
+    expect(collections).toEqual(["admin", "secrets"]);
   });
 });

@@ -109,7 +109,7 @@ export class ReflogManager {
   async lastKnownState(branchName: string): Promise<ReflogEntry | null> {
     return this.entries.findOne(
       { branchName },
-      { sort: { timestamp: -1 } }
+      { sort: { timestamp: -1, _id: -1 } }
     );
   }
 }

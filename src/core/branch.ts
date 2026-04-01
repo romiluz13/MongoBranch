@@ -322,10 +322,19 @@ export class BranchManager {
     const sourceDb = this.resolveDatabase(meta.parentBranch ?? MAIN_BRANCH);
     const branchDb = this.client.db(meta.branchDatabase);
 
-    // Copy the collection data
-    const docs = await sourceDb.collection(collectionName).find({}).toArray();
-    if (docs.length > 0) {
-      await branchDb.collection(collectionName).insertMany(docs);
+    // Copy the collection data using batched cursor iteration to avoid memory issues
+    const BATCH_SIZE = 1000;
+    const cursor = sourceDb.collection(collectionName).find({}).batchSize(BATCH_SIZE);
+    let batch: Record<string, unknown>[] = [];
+    for await (const doc of cursor) {
+      batch.push(doc as Record<string, unknown>);
+      if (batch.length >= BATCH_SIZE) {
+        await branchDb.collection(collectionName).insertMany(batch);
+        batch = [];
+      }
+    }
+    if (batch.length > 0) {
+      await branchDb.collection(collectionName).insertMany(batch);
     }
 
     // Copy indexes (source collection may not exist if it's new)

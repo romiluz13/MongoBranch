@@ -54,9 +54,22 @@ afterAll(async () => {
   await stopMongoDB();
 }, 10_000);
 
+// Collections created by AI stress tests that must be cleaned between runs
+const AI_TEST_COLLECTIONS = [
+  "product_vectors", "knowledge_base", "user_profiles", "movies",
+  "ai_experiments", "product_embeddings", "user_embeddings",
+];
+
 beforeEach(async () => {
   await getTestEnvironment();
   await cleanupBranches(client);
+
+  // Drop AI-test collections from prior runs
+  const sourceDb = client.db(SEED_DATABASE);
+  for (const name of AI_TEST_COLLECTIONS) {
+    try { await sourceDb.dropCollection(name); } catch { /* may not exist */ }
+  }
+
   config = {
     uri,
     sourceDatabase: SEED_DATABASE,

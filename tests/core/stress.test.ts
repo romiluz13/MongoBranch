@@ -53,6 +53,20 @@ beforeEach(async () => {
   await getTestEnvironment();
   await cleanupBranches(client);
 
+  // Drop stress-test collections from prior runs in source DB
+  const sourceDb = client.db(SEED_DATABASE);
+  const collections = await sourceDb.listCollections().toArray();
+  for (const col of collections) {
+    if (
+      col.name.startsWith("queue_data_") ||
+      col.name.startsWith("stress_") ||
+      col.name.startsWith("lifecycle_") ||
+      col.name.startsWith("cow_")
+    ) {
+      await sourceDb.dropCollection(col.name);
+    }
+  }
+
   config = {
     uri,
     sourceDatabase: SEED_DATABASE,

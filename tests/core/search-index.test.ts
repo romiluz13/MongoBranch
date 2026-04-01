@@ -50,6 +50,28 @@ beforeAll(async () => {
     console.log(
       "  ⚠️  Skipping search index tests — Atlas Local Docker required"
     );
+  } else {
+    // Probe whether mongot is actually running (atlas-local:preview may lack it)
+    try {
+      await client
+        .db(SEED_DATABASE)
+        .collection("users")
+        .listSearchIndexes()
+        .toArray();
+    } catch (err: unknown) {
+      const code = (err as { codeName?: string }).codeName;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        code === "SearchNotEnabled" ||
+        msg.includes("listSearchIndexes") ||
+        msg.includes("Search")
+      ) {
+        skipSearchTests = true;
+        console.log(
+          "  ⚠️  Skipping search index tests — mongot not available on this Atlas Local instance"
+        );
+      }
+    }
   }
 }, 30_000);
 
