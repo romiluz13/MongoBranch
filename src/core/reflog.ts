@@ -65,7 +65,7 @@ export class ReflogManager {
   async forBranch(branchName: string, limit = 50): Promise<ReflogEntry[]> {
     return this.entries
       .find({ branchName })
-      .sort({ timestamp: -1 })
+      .sort({ timestamp: -1, _id: -1 })
       .limit(limit)
       .toArray();
   }

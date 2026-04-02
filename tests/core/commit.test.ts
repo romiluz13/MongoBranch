@@ -352,6 +352,8 @@ describe("CommitEngine.listTags", () => {
     const c2 = await commitEngine.commit({ branchName: "feat-list-tags", message: "C2" });
 
     await commitEngine.createTag("alpha", c1.hash);
+    // Small delay to ensure distinct timestamps for sort ordering
+    await new Promise((r) => setTimeout(r, 50));
     await commitEngine.createTag("beta", c2.hash);
 
     const tags = await commitEngine.listTags();

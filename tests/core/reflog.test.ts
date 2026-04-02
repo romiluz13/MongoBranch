@@ -51,6 +51,9 @@ describe("ReflogManager — record & query", () => {
       actor: "alice",
     });
 
+    // Small delay to ensure distinct timestamps for sort ordering
+    await new Promise((r) => setTimeout(r, 50));
+
     await reflog.record({
       branchName: "feature-x",
       action: "commit",
