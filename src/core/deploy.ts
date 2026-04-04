@@ -47,6 +47,11 @@ export class DeployRequestManager {
     await this.requests.createIndex({ id: 1 }, { unique: true });
     await this.requests.createIndex({ status: 1 });
     await this.requests.createIndex({ sourceBranch: 1, targetBranch: 1 });
+    // Partial index: quickly find open/approved requests (common query path)
+    await this.requests.createIndex(
+      { sourceBranch: 1, status: 1 },
+      { partialFilterExpression: { status: { $in: ["open", "approved"] } } }
+    ).catch(() => {}); // May already exist
     await this.protectionManager.initialize();
     await this.hookManager.initialize();
   }
@@ -93,7 +98,7 @@ export class DeployRequestManager {
     // Compute diff
     let diff: DiffResult | undefined;
     try {
-      diff = await this.diffEngine.diff(sourceBranch, targetBranch);
+      diff = await this.diffEngine.diffBranches(sourceBranch, targetBranch);
     } catch {
       // Diff may fail if branches have no overlap — still allow DR creation
     }
@@ -110,7 +115,7 @@ export class DeployRequestManager {
       createdBy,
       createdAt: now,
       updatedAt: now,
-      isTargetProtected,
+      isTargetProtected: isTargetProtected ? true : undefined,
     };
 
     await this.requests.insertOne(dr);
@@ -128,7 +133,8 @@ export class DeployRequestManager {
     }
 
     await this.requests.updateOne({ id }, {
-      $set: { status: "approved", reviewedBy, updatedAt: new Date() },
+      $set: { status: "approved", reviewedBy },
+      $currentDate: { updatedAt: true },
     });
 
     return { ...dr, status: "approved", reviewedBy };
@@ -149,8 +155,8 @@ export class DeployRequestManager {
         status: "rejected",
         reviewedBy,
         rejectionReason: reason,
-        updatedAt: new Date(),
       },
+      $currentDate: { updatedAt: true },
     });
 
     return { ...dr, status: "rejected", reviewedBy, rejectionReason: reason };
@@ -176,9 +182,9 @@ export class DeployRequestManager {
     // Perform the merge
     const mergeResult = await this.mergeEngine.merge(dr.sourceBranch, dr.targetBranch);
 
-    const now = new Date();
     await this.requests.updateOne({ id }, {
-      $set: { status: "merged", mergedAt: now, updatedAt: now },
+      $set: { status: "merged" },
+      $currentDate: { mergedAt: true, updatedAt: true },
     });
 
     // Fire post-merge hooks (fire-and-forget)
@@ -186,7 +192,7 @@ export class DeployRequestManager {
     this.hookManager.executePostHooks(postCtx).catch(() => {}); // post-hooks don't block
 
     return {
-      deployRequest: { ...dr, status: "merged", mergedAt: now },
+      deployRequest: { ...dr, status: "merged", mergedAt: new Date() },
       mergeResult,
     };
   }

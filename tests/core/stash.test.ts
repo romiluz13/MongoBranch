@@ -16,6 +16,7 @@ let branchManager: BranchManager;
 let stashManager: StashManager;
 
 const config: MongoBranchConfig = {
+  uri: "",
   sourceDatabase: "test_stash_source",
   metaDatabase: "__mongobranch_stash",
   branchPrefix: "__mb_stash_",
@@ -66,7 +67,7 @@ describe("StashManager — stash & pop", () => {
     expect(entry.branchName).toBe("stash-basic");
     expect(entry.message).toBe("WIP changes");
     expect(entry.index).toBe(0);
-    expect(entry.data.users.length).toBe(2);
+    expect(entry.data.users!.length).toBe(2);
 
     // Branch should be empty after stash
     const afterCount = await branchDb.collection("users").countDocuments();
@@ -101,8 +102,8 @@ describe("StashManager — stash & pop", () => {
 
     const list = await stashManager.list("stash-stack");
     expect(list.length).toBe(2);
-    expect(list[0].message).toBe("Second stash"); // index 0 = newest
-    expect(list[1].message).toBe("First stash");  // index 1 = older
+    expect(list[0]!.message).toBe("Second stash"); // index 0 = newest
+    expect(list[1]!.message).toBe("First stash");  // index 1 = older
   });
 
   it("drops a specific stash", async () => {

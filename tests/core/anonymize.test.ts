@@ -14,6 +14,7 @@ let client: MongoClient;
 let anonymizeEngine: AnonymizeEngine;
 
 const config: MongoBranchConfig = {
+  uri: "",
   sourceDatabase: "test_anon_source",
   metaDatabase: "__mongobranch_anon",
   branchPrefix: "__mb_anon_",

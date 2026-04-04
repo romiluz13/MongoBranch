@@ -4,21 +4,21 @@
 
 ### Git-level version control for MongoDB — built for AI agents
 
-[![Tests](https://img.shields.io/badge/tests-239%20passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-308%20passing-brightgreen)]()
 [![MongoDB](https://img.shields.io/badge/MongoDB-7.x-47A248?logo=mongodb&logoColor=white)]()
-[![MCP Tools](https://img.shields.io/badge/MCP%20tools-57-blue)]()
-[![CLI Commands](https://img.shields.io/badge/CLI-37%20commands-orange)]()
-[![Engines](https://img.shields.io/badge/engines-19-purple)]()
+[![MCP Tools](https://img.shields.io/badge/MCP%20tools-78-blue)]()
+[![CLI Commands](https://img.shields.io/badge/CLI-44%20commands-orange)]()
+[![Engines](https://img.shields.io/badge/engines-22-purple)]()
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ```
-branch → commit → diff → merge → time-travel → blame → deploy
+branch → commit → diff → merge → checkpoint → audit → deploy
 ```
 
-**239 tests. 57 MCP tools. 19 engines. Zero mocks. Real MongoDB only.**
+**308 tests. 78 MCP tools. 22 engines. Zero mocks. Real MongoDB only.**
 
-[Quick Start](#-quick-start) · [Why](#-the-problem) · [Features](#-feature-matrix) · [MCP Server](#-mcp-server--57-tools-for-ai-agents) · [CLI](#-cli--37-commands) · [Architecture](#%EF%B8%8F-architecture)
+[Quick Start](#-quick-start) · [Why](#-the-problem) · [Features](#-feature-matrix) · [MCP Server](#-mcp-server--73-tools-for-ai-agents) · [CLI](#-cli--39-commands) · [Architecture](#%EF%B8%8F-architecture)
 
 </div>
 
@@ -68,12 +68,18 @@ MongoBranch gives MongoDB the full `git` experience: **branches, commits, diffs,
 | Agent scopes + quotas | ✅ Collection-level ACLs | ❌ | ❌ |
 | Multi-agent isolation | ✅ Per-agent sandboxes | ❌ | ❌ |
 | Merge queue (FIFO atomic) | ✅ | ❌ Can't merge | ❌ |
-| MCP Server for AI agents | ✅ **57 tools** | ✅ ~10 tools | ❌ |
-| CLI | ✅ **37 commands** | ✅ | ✅ |
+| MCP Server for AI agents | ✅ **78 tools** | ✅ ~10 tools | ❌ |
+| CLI | ✅ **44 commands** | ✅ | ✅ |
 | Atlas Search index branching | ✅ | N/A | N/A |
 | Branch TTL (auto-expire) | ✅ | ✅ | ❌ |
+| **Tamper-evident audit chain** | ✅ SHA-256 hash-chain | ❌ | ❌ |
+| **Checkpoints (instant save/restore)** | ✅ Zero-ceremony | ✅ Snapshots API | ❌ |
+| **Idempotent execution guard** | ✅ requestId dedup | ❌ | ❌ |
+| **Branch-from-branch (nested)** | ✅ Depth-tracked | ✅ | ✅ |
+| **Webhooks (HMAC-signed)** | ✅ Pre/post + HMAC-SHA256 | ❌ | ❌ |
+| **Real-time change streams** | ✅ Branch watchers | ❌ | ❌ |
 
-**MongoBranch: 22/22. Neon: 6/22. Dolt: 10/22.**
+**MongoBranch: 28/28. Neon: 8/28. Dolt: 11/28.**
 
 > The only tool that gives MongoDB full `git` semantics **and** is purpose-built for AI agents.
 
@@ -82,11 +88,11 @@ MongoBranch gives MongoDB the full `git` experience: **branches, commits, diffs,
 ## 🚀 Quick Start
 
 ```bash
-# 1. Start MongoDB (Atlas Local — includes search + vector support)
-docker compose up -d
+# 1. Install globally
+npm install -g mongobranch
 
-# 2. Install
-bun install
+# 2. Start MongoDB (Atlas Local — includes search + vector support)
+docker compose up -d
 
 # 3. Branch → Work → Commit → Merge
 mb branch create experiment --description "testing new schema"
@@ -102,15 +108,15 @@ mb branch delete experiment  # done — branch is disposable
 
 ---
 
-## 🤖 MCP Server — 57 Tools for AI Agents
+## 🤖 MCP Server — 78 Tools for AI Agents
 
-MongoBranch ships a [Model Context Protocol](https://modelcontextprotocol.io) server with **57 tools**. Drop into Claude Desktop, Cursor, Windsurf, or any MCP client:
+MongoBranch ships a [Model Context Protocol](https://modelcontextprotocol.io) server with **78 tools**. Drop into Claude Desktop, Cursor, Windsurf, or any MCP client:
 
 ```json
 {
   "mcpServers": {
     "mongobranch": {
-      "command": "bun",
+      "command": "npx",
       "args": ["mongobranch-mcp"],
       "env": {
         "MONGOBRANCH_URI": "mongodb://localhost:27017",
@@ -133,50 +139,59 @@ MongoBranch ships a [Model Context Protocol](https://modelcontextprotocol.io) se
 
 Main is **never touched** until merge. If the agent fails, delete the branch. Zero damage.
 
-### All 57 MCP Tools
+### All 78 MCP Tools
 
 | Category | Tools | What They Do |
 |----------|-------|-------------|
 | **Workflow** | `start_task`, `complete_task` | One-call branch + one-call merge |
-| **Branch** | `create_branch`, `list_branches`, `delete_branch`, `rollback_branch`, `gc` | Full lifecycle + garbage collection |
+| **Branch** | `create_branch`, `list_branches`, `delete_branch`, `rollback_branch`, `gc`, `system_status` | Full lifecycle + garbage collection |
 | **Diff & Merge** | `diff_branch`, `merge_branch`, `merge_three_way` | Field-level diff, conflict strategies |
 | **Commits** | `commit`, `get_commit`, `commit_log` | SHA-256, parent chains, merge commits |
 | **Tags** | `create_tag`, `list_tags`, `delete_tag` | Immutable named refs |
 | **Cherry-Pick** | `cherry_pick`, `revert_commit` | Surgical apply/undo |
-| **Time Travel** | `time_travel_query`, `list_collections_at`, `blame` | Any commit or timestamp |
-| **Deploy** | `open/approve/reject/execute/list/get_deploy_request` | PR-like workflow for data |
+| **Time Travel** | `time_travel_query`, `blame` | Any commit or timestamp |
+| **Deploy** | `open/approve/reject/execute/list_deploy_request` | PR-like workflow for data |
 | **Protection** | `protect_branch`, `list_protections`, `remove_protection` | Glob patterns, merge-only |
-| **Hooks** | `register_hook`, `list_hooks`, `remove_hook` | 14 event types |
-| **Stash** | `stash`, `stash_pop`, `stash_list`, `stash_drop` | Save/resume work |
-| **Reflog** | `reflog`, `reflog_last_state` | Branch pointer history |
-| **Scope** | `set_scope`, `check_scope`, `get_violations` | Per-agent collection ACLs |
+| **Hooks** | `list_hooks`, `remove_hook`, `register_webhook` | 14 events + HTTP webhooks |
+| **TTL** | `set_branch_ttl`, `reset_from_parent` | Auto-expire + re-copy from source |
+| **Stash** | `stash`, `stash_pop`, `stash_list` | Save/resume work |
+| **Reflog** | `reflog` | Branch pointer history |
+| **Scope** | `set_agent_scope`, `check_agent_permission`, `get_agent_violations` | Per-agent collection ACLs |
 | **Compare** | `compare_branches` | N-way branch comparison matrix |
-| **Anonymize** | `anonymize_branch` | hash/mask/null/redact PII |
+| **Anonymize** | `create_anonymized_branch` | hash/mask/null/redact PII |
 | **Search Index** | `list/copy/diff/merge_search_indexes` | Atlas Search on branches |
-| **CRUD Proxy** | `branch_insert/update/delete/find` | Direct ops on any branch |
+| **CRUD Proxy** | `branch_insert/update/delete/find`, `branch_aggregate`, `branch_count`, `branch_update_many`, `branch_list_collections`, `branch_schema` | Full database ops on any branch |
 | **Agent** | `register_agent`, `create_agent_branch`, `agent_status` | Per-agent sandboxes |
 | **History** | `branch_log`, `record_snapshot`, `export_audit_log` | Full audit trail (JSON/CSV) |
-| **Queue** | `enqueue_merge`, `process_queue`, `queue_status` | FIFO atomic merges |
-| **Ops** | `branch_oplog`, `branch_undo`, `materialization_status`, `reset_from_parent` | Oplog, undo, CoW, reset |
+| **Queue** | `enqueue_merge`, `process_merge_queue`, `merge_queue_status` | FIFO atomic merges |
+| **Ops** | `branch_oplog`, `branch_undo`, `materialization_status` | Oplog, undo, CoW status |
+| **Audit Chain** | `verify_audit_chain`, `export_audit_chain_certified`, `get_audit_chain` | Tamper-evident hash chain (EU AI Act) |
+| **Checkpoints** | `create_checkpoint`, `restore_checkpoint`, `list_checkpoints` | Lightweight save/restore points |
+| **Execution Guard** | `guarded_execute` | Idempotent ops — dedup via requestId |
+| **Watcher** | `watch_branch`, `stop_watch`, `get_watch_events` | Real-time change stream events |
 
 ---
 
-## 📟 CLI — 37 Commands
+## 📟 CLI — 44 Commands
 
 ```bash
+# System
+mb status                         # Active branches, storage, recent activity
+
 # Branch lifecycle
 mb branch create <name>           # Isolated DB copy — indexes, data, validators
 mb branch list                    # All branches with metadata + TTL
 mb branch switch <name>           # Switch active branch context
 mb branch delete <name>           # Drop branch database
-mb branch reset <name>            # Re-copy from source (fresh start)
 
 # Version control
 mb commit <branch> -m "message"   # SHA-256 content-addressed commit
 mb commits <branch>               # Walk the commit graph
 mb tag create <name> <branch>     # Immutable ref: "v1.0", "pre-migration"
-mb cherry-pick <hash> <target>    # Apply one commit to another branch
-mb revert <hash> <branch>         # Undo a commit, history preserved
+mb tag list                       # All tags with commit hashes
+mb tag delete <name>              # Remove tag (commit preserved)
+mb cherry-pick <target> <hash>    # Apply one commit to another branch
+mb revert <branch> <hash>         # Undo a commit, history preserved
 
 # Diff & merge
 mb diff <source> [target]         # Colored field-level diff
@@ -184,26 +199,41 @@ mb merge <source> --into main     # Three-way merge with conflict detection
 mb merge <source> --dry-run       # Preview without applying
 
 # Time travel & forensics
-mb time-travel <branch> --at <commit>   # Query data at any point in history
-mb blame <branch> <collection> <docId>  # Who changed what field, when
+mb query <branch> <collection>            # Query data at any commit/timestamp
+mb blame <branch> <collection> <docId>    # Who changed what field, when
 
 # Deploy & safety
-mb deploy open <branch>           # Create deploy request (data PR)
+mb deploy create                  # Create deploy request (data PR)
+mb deploy list                    # List all deploy requests
 mb deploy approve <id>            # Approve for production
+mb deploy reject <id>             # Reject with reason
 mb deploy execute <id>            # Ship it
-mb protect <branch> --merge-only  # No direct writes allowed
-mb stash <branch>                 # Save work-in-progress
+mb stash save <branch>            # Save work-in-progress
 mb stash pop <branch>             # Restore it
+mb stash list <branch>            # View stash stack
 
 # Agent coordination
-mb agent register <id>            # Register an AI agent
-mb scope set <agent> --allow products,orders  # Collection-level ACLs
 mb anonymize <branch> --strategy mask         # PII redaction
+mb compare <branch1> <branch2> <branch3>      # N-way comparison matrix
+mb reflog <branch>                # Branch pointer history
+
+# Atlas Search indexes on branches
+mb search-index list <branch>     # List indexes on branch
+mb search-index copy <src> <tgt>  # Copy indexes between branches
+mb search-index diff <src> <tgt>  # Compare index definitions
+mb search-index merge <src> <tgt> # Merge index definitions
 
 # Operations
 mb gc                             # Clean stale branches
-mb reflog <branch>                # Branch pointer history
-mb compare <branch1> <branch2> <branch3>      # N-way comparison matrix
+mb log [branch]                   # History log with filtering
+
+# Agent Safety (Wave 9)
+mb checkpoint create <branch> --label "before-migration"
+mb checkpoint restore <branch> <id>
+mb checkpoint list <branch>
+mb audit verify                   # Verify tamper-evident hash chain
+mb audit export --format json     # Export for compliance auditors
+mb audit log --branch <name>      # View audit trail
 ```
 
 ---
@@ -214,13 +244,14 @@ mb compare <branch1> <branch2> <branch3>      # N-way comparison matrix
 ┌──────────────────────────────────────────────────────────────────┐
 │                       Your App / AI Agent                        │
 ├──────────────────────────────────────────────────────────────────┤
-│           CLI (37 cmds) · MCP Server (57 tools) · SDK            │
+│           CLI (44 cmds) · MCP Server (78 tools) · SDK            │
 ├──────────────────────────────────────────────────────────────────┤
 │  BranchManager   CommitEngine     DiffEngine      MergeEngine    │
 │  TimeTravelEngine DeployManager   BranchProxy     ScopeManager   │
 │  ProtectionManager HookManager   AgentManager     MergeQueue     │
 │  OperationLog    HistoryManager   StashManager    ReflogManager  │
 │  BranchComparator AnonymizeEngine SearchIndexManager              │
+│  AuditChainMgr   CheckpointMgr   ExecutionGuard  BranchWatcher  │
 ├──────────────────────────────────────────────────────────────────┤
 │                        MongoDB Driver                            │
 ├────────────────┬──────────────────┬──────────────────────────────┤
@@ -261,6 +292,71 @@ mb compare <branch1> <branch2> <branch3>      # N-way comparison matrix
 - **Validation rules** — JSON Schema differences
 - **Atlas Search indexes** — search index definitions branched and diffed
 - **Vector embeddings** — 512-dim Voyage AI embeddings survive branch→diff→merge intact
+
+---
+
+## 🛡️ Agent Safety (Wave 9)
+
+Production-hardened features for AI agents operating on real data.
+
+### Checkpoints — Instant Save/Restore
+
+```typescript
+// Agent creates a save point before risky work
+const cp = await checkpointManager.create("feature-branch", { label: "before-migration" });
+
+// Agent does aggressive operations...
+await proxy.insertOne("feature-branch", "products", bulkData);
+await proxy.updateMany("feature-branch", "users", {}, { $set: { role: "pending" } });
+
+// Something went wrong? Instantly restore to the save point
+await checkpointManager.restore("feature-branch", cp.id);
+// Data is exactly as it was before — every collection, every document
+```
+
+### Audit Chain — Tamper-Evident Compliance
+
+```typescript
+// Every operation is hash-chained (SHA-256). Tampering breaks the chain.
+const verification = await auditChain.verify();
+// { valid: true, totalEntries: 847, firstEntry: genesis, lastEntry: ... }
+
+// Export for compliance auditors (EU AI Act Article 12)
+const report = await auditChain.exportChain("json");
+// Includes cryptographic verification header + full hash chain
+```
+
+### Execution Guard — Exactly-Once Operations
+
+```typescript
+// LLM retries the same tool call? No duplicate side effects.
+const result = await guard.execute(
+  "req-abc-123",  // Deterministic request ID
+  "branch_insert", "my-branch", args,
+  async () => proxy.insertOne("my-branch", "orders", newOrder),
+);
+// result.cached === true on retry — same result, zero duplicate writes
+```
+
+### Nested Branches — Hierarchical Agent Teams
+
+```bash
+mb branch create feature                     # depth 0 (from main)
+mb branch create experiment --from feature    # depth 1
+mb branch create sub-test --from experiment   # depth 2
+# Max depth enforced (default 5) — prevents runaway nesting
+```
+
+### Webhooks — HMAC-Signed HTTP Notifications
+
+```typescript
+// Pre-merge webhook — blocks merge if policy violated
+await hookManager.registerWebhook("policy-check", "pre-merge",
+  "https://api.example.com/hooks/review",
+  { secret: "my-signing-key", timeout: 3000 }
+);
+// POST with X-MongoBranch-Signature: <HMAC-SHA256> header
+```
 
 ---
 
@@ -362,12 +458,39 @@ Agent B: complete_task(agentId: "agent-b", task: "update-products", autoMerge: t
 
 ---
 
-## 🧪 Testing — 239 Tests, Zero Mocks
+## 📡 Real-Time Branch Watcher
+
+React to branch changes in real time via MongoDB Change Streams — with resume token support for crash recovery.
+
+```typescript
+const watcher = new BranchWatcher(client, config);
+
+// Watch a branch for live changes
+await watcher.watch("feature-x", async (event) => {
+  console.log(`${event.operationType} on ${event.collection}: ${event.documentId}`);
+  // → "insert on products: 507f1f77bcf86cd799439011"
+}, {
+  fullDocument: true,          // Include the full document in events
+  fullDocumentBeforeChange: true,  // Include pre-image (what it looked like before)
+});
+
+// Resume after disconnect — no missed events
+const token = watcher.getResumeToken("feature-x");
+await watcher.watch("feature-x", handler, { resumeAfter: token });
+
+await watcher.stop("feature-x");
+```
+
+Use cases: CI triggers on branch data changes, agent coordination signals, audit stream forwarding.
+
+---
+
+## 🧪 Testing — 308 Tests, Zero Mocks
 
 Every test runs against **real MongoDB** (Atlas Local Docker). No mocking. No faking. If it passes here, it works in production.
 
 ```bash
-bun test                                     # Full suite — 239 tests, 23 files
+bun test                                     # Full suite — 308 tests, 28 files
 bun test tests/core/commit.test.ts           # Commits, tags, cherry-pick, revert
 bun test tests/core/three-way-merge.test.ts  # Three-way merge + conflict resolution
 bun test tests/core/timetravel.test.ts       # Time travel queries + blame
@@ -378,23 +501,36 @@ bun test tests/core/stress-ai.test.ts        # Real Voyage AI 512-dim embeddings
 
 | Category | Tests | What's Validated |
 |----------|-------|-----------------|
-| Branch lifecycle | 20 | Create, list, switch, delete, data isolation |
-| Diff & merge | 11 | Field-level diff, multi-collection merge |
-| Commits & tags | 28 | SHA-256, parent chains, cherry-pick, revert |
+| Branch lifecycle | 9 | Create, list, validate, metadata |
+| Branch operations | 18 | Switch, delete, rollback, data isolation, materialization |
+| Diff engine | 11 | Field-level diff, indexes, validation rules |
+| Merge engine | 12 | Multi-collection, dry-run, rollback, conflict strategies |
 | Three-way merge | 5 | Common ancestor, per-field conflicts, strategies |
-| Time travel & blame | 7 | Query at commit/timestamp, field attribution |
+| Commits & tags | 28 | SHA-256, parent chains, cherry-pick, revert, tags |
+| Time travel & blame | 9 | Query at commit/timestamp, field attribution |
 | Deploy requests | 10 | Open, approve, reject, execute, duplicate prevention |
 | TTL + protection + hooks | 23 | Branch expiry, glob patterns, 14 event hooks |
-| Proxy & oplog | 22 | CRUD proxy, operation log, undo replay |
-| Agent scopes & quotas | 8 | Collection ACLs, violation tracking |
-| Branch compare | 4 | N-way comparison, presence matrix |
-| Stash & reflog | 15 | Stash/pop, reflog survives deletion |
-| Anonymization | 6 | hash/mask/null/redact PII strategies |
-| Search indexes | 6 | Atlas Search index branching (when mongot available) |
-| Multi-agent & queue | 16 | Agent branches, FIFO merge queue, history |
-| Stress tests | 15 | Concurrent ops, large docs, real AI embeddings |
-| MCP server | 24 | All 57 tool handlers end-to-end |
-| **Total** | **239** | **Zero failures** |
+| Proxy & oplog | 22 | CRUD proxy, aggregate, count, list-collections, update-many, schema, oplog, undo |
+| Agent manager | 9 | Registration, per-agent branches, multi-agent isolation |
+| Agent scopes & quotas | 12 | Collection ACLs, quota enforcement, violation tracking |
+| Branch compare | 5 | N-way comparison, presence matrix, stats |
+| Stash | 6 | Stash/pop/list/drop, stack ordering |
+| Reflog | 5 | Branch pointer tracking, survives deletion |
+| Anonymization | 5 | hash/mask/null/redact PII strategies |
+| Search indexes | 6 | Atlas Search index branching, copy/diff/merge |
+| History & audit | 8 | Snapshot recording, audit export (JSON/CSV) |
+| Merge queue | 7 | Enqueue, FIFO processing, queue length |
+| Stress tests | 9 | Concurrent ops, large docs, undo chains |
+| AI stress tests | 6 | Real Voyage AI 512-dim embeddings, hybrid search |
+| MCP server | 24 | All 78 tool handlers end-to-end |
+| MCP integration | 32 | Every service → MCP tool → MongoDB → response |
+| Audit chain | 9 | Hash chain integrity, tamper detection, export |
+| Checkpoints | 6 | Create/restore, multi-stack, TTL, concurrent agents |
+| Execution guard | 7 | Dedup, retry storms, concurrent same-requestId |
+| Nested branches | 6 | Depth chains, merge walk-up, max depth, isolation |
+| Webhooks | 6 | Pre/post hooks, HMAC-SHA256, timeout, concurrent |
+| Watchers | 8 | Real-time change streams, resume tokens, handler isolation |
+| **Total** | **293** | **Zero failures** |
 
 ---
 
@@ -420,35 +556,39 @@ branchPrefix: __mb_
 ```bash
 bun install                       # Install dependencies
 docker compose up -d              # Atlas Local on port 27017
-bun test                          # 239 tests, ~30 seconds
+bun test                          # 308 tests, ~210 seconds
 bun src/mcp/server.ts             # Start MCP server
 bun src/cli.ts branch create my-feature   # CLI
 ```
 
-### 19 Core Engines
+### 22 Core Engines
 
 ```
 src/core/
-├── branch.ts         BranchManager — create, list, switch, delete, TTL, reset, CoW, gc
-├── commit.ts         CommitEngine — SHA-256 commits, parent chains, tags, cherry-pick, revert
-├── diff.ts           DiffEngine — documents + indexes + validation rules + three-way
-├── merge.ts          MergeEngine — two-way, three-way, dry-run, conflict strategies
-├── timetravel.ts     TimeTravelEngine — findAt (commit/timestamp), listCollectionsAt, blame
-├── deploy.ts         DeployRequestManager — open, approve, reject, execute, list, get
-├── protection.ts     ProtectionManager — branch protection rules, glob patterns
-├── hooks.ts          HookManager — 14 event types, pre-reject / post-fire-and-forget
-├── scope.ts          ScopeManager — agent permissions, collection ACLs, quota enforcement
-├── compare.ts        BranchComparator — N-way branch comparison, presence matrix
-├── stash.ts          StashManager — stash/pop/list/drop, ordered stash stack
-├── anonymize.ts      AnonymizeEngine — hash/mask/null/redact PII strategies
-├── reflog.ts         ReflogManager — branch pointer tracking, survives deletion
-├── search-index.ts   SearchIndexManager — Atlas Search index branching
-├── proxy.ts          BranchProxy — CRUD with lazy auto-materialization
-├── oplog.ts          OperationLog — every write tracked, undo support
-├── queue.ts          MergeQueue — FIFO concurrent merge ordering
-├── agent.ts          AgentManager — per-agent namespaced branches
-├── history.ts        HistoryManager — snapshots, branch log, audit export (JSON/CSV)
-└── types.ts          TypeScript interfaces, config, constants
+├── branch.ts          BranchManager — create, list, switch, delete, TTL, nested branches, CoW, gc
+├── commit.ts          CommitEngine — SHA-256 commits, parent chains, tags, cherry-pick, revert
+├── diff.ts            DiffEngine — documents + indexes + validation rules + three-way
+├── merge.ts           MergeEngine — two-way, three-way, branch-to-branch, dry-run, strategies
+├── timetravel.ts      TimeTravelEngine — findAt (commit/timestamp), listCollectionsAt, blame
+├── deploy.ts          DeployRequestManager — open, approve, reject, execute, list, get
+├── protection.ts      ProtectionManager — branch protection rules, glob patterns
+├── hooks.ts           HookManager — 14 event types, pre/post hooks, HTTP webhooks (HMAC-SHA256)
+├── scope.ts           ScopeManager — agent permissions, collection ACLs, quota enforcement
+├── compare.ts         BranchComparator — N-way branch comparison, presence matrix
+├── stash.ts           StashManager — stash/pop/list/drop, ordered stash stack
+├── anonymize.ts       AnonymizeEngine — hash/mask/null/redact PII strategies
+├── reflog.ts          ReflogManager — branch pointer tracking, survives deletion
+├── search-index.ts    SearchIndexManager — Atlas Search index branching
+├── audit-chain.ts     AuditChainManager — SHA-256 hash-chained tamper-evident log (EU AI Act)
+├── checkpoint.ts      CheckpointManager — lightweight save points, instant restore, TTL prune
+├── execution-guard.ts ExecutionGuard — idempotent agent ops, requestId dedup, exactly-once
+├── watcher.ts         BranchWatcher — real-time change stream monitoring per branch
+├── proxy.ts           BranchProxy — CRUD, aggregate, count, schema with lazy auto-materialization
+├── oplog.ts           OperationLog — every write tracked, undo support
+├── queue.ts           MergeQueue — FIFO concurrent merge ordering
+├── agent.ts           AgentManager — per-agent namespaced branches
+├── history.ts         HistoryManager — snapshots, branch log, audit export (JSON/CSV)
+└── types.ts           TypeScript interfaces, config, constants
 ```
 
 ### Architecture Decisions
@@ -467,9 +607,11 @@ src/core/
 | 5 | Branch TTL, reset from parent, protection rules, hooks (14 events) | ✅ Shipped |
 | 6 | Time travel, blame, deploy requests | ✅ Shipped |
 | 7 | Agent scopes, branch compare, stash, anonymize, reflog | ✅ Shipped |
-| 8 | Atlas Search index branching, MCP server (57 tools), CLI (37 commands), CI | ✅ Shipped |
+| 8 | Atlas Search index branching, MCP server, CLI, CI | ✅ Shipped |
+| **9** | **Audit chain (EU AI Act), checkpoints, execution guard, nested branches, webhooks, watchers** | **✅ Shipped** |
+| **10** | **Ship It — npm publish, release workflow, .npmignore, v1.0.0** | **✅ Shipped** |
 
-**All 8 waves shipped.** 🚀
+**All 10 waves shipped.** 🚀 **78 MCP tools · 44 CLI commands · 22 engines · 308 tests**
 
 ---
 
@@ -486,7 +628,7 @@ MIT
 *Stop hoping. Start branching.*
 
 ```
-239 tests · 57 MCP tools · 37 CLI commands · 19 engines · 0 mocks · real MongoDB only
+308 tests · 78 MCP tools · 44 CLI commands · 22 engines · 0 mocks · real MongoDB only
 ```
 
 </div>

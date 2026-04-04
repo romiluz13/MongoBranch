@@ -1,0 +1,30 @@
+# Tests
+tests/
+vitest.config.ts
+tsc-output.txt
+
+# Development docs
+docs/
+memory/
+plan/
+landing/
+AGENTS.md
+CLAUDE.md
+
+# Infrastructure
+docker-compose.yml
+.github/
+
+# Demo files
+demo.sh
+seed-demo.ts
+
+# Lock files
+bun.lock
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store

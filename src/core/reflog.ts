@@ -46,8 +46,12 @@ export class ReflogManager {
 
   async initialize(): Promise<void> {
     await this.entries.createIndex({ branchName: 1, timestamp: -1 });
-    await this.entries.createIndex({ timestamp: -1 });
     await this.entries.createIndex({ action: 1 });
+    // TTL: auto-expire reflog entries after 90 days
+    await this.entries.createIndex(
+      { timestamp: 1 },
+      { expireAfterSeconds: 90 * 24 * 60 * 60 }
+    ).catch(() => {});
   }
 
   /**

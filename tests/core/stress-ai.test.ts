@@ -100,8 +100,8 @@ describe("Stress: real Voyage AI embeddings through branch lifecycle", () => {
 
     // Verify real API response
     expect(embeddings).toHaveLength(3);
-    expect(embeddings[0].dimensions).toBe(EMBEDDING_DIM);
-    expect(embeddings[0].model).toBe("voyage-3-lite");
+    expect(embeddings[0]!.dimensions).toBe(EMBEDDING_DIM);
+    expect(embeddings[0]!.model).toBe("voyage-3-lite");
 
     // Create branch and insert products with REAL embeddings
     await branchManager.createBranch({ name: "real-embed" });
@@ -110,9 +110,9 @@ describe("Stress: real Voyage AI embeddings through branch lifecycle", () => {
       await proxy.insertOne("real-embed", "product_vectors", {
         productName: ["CloudSync Pro", "DataVault Enterprise", "APIGateway Lite"][i],
         description: productTexts[i],
-        embedding: embeddings[i].embedding,
-        model: embeddings[i].model,
-        dimensions: embeddings[i].dimensions,
+        embedding: embeddings[i]!.embedding,
+        model: embeddings[i]!.model,
+        dimensions: embeddings[i]!.dimensions,
         category: ["SaaS", "Database", "API"][i],
         createdAt: new Date(),
       });
@@ -132,7 +132,7 @@ describe("Stress: real Voyage AI embeddings through branch lifecycle", () => {
     // Diff captures all real-vector documents
     const diff = await diffEngine.diffBranches("real-embed", "main");
     expect(diff.collections["product_vectors"]).toBeDefined();
-    expect(diff.collections["product_vectors"].added).toHaveLength(3);
+    expect(diff.collections["product_vectors"]!.added).toHaveLength(3);
 
     // Merge real vectors to main
     const mergeResult = await mergeEngine.merge("real-embed", "main");
@@ -185,7 +185,7 @@ describe("Stress: real Voyage AI embeddings through branch lifecycle", () => {
     // Diff sees the new doc
     const diff = await diffEngine.diffBranches("re-embed", "main");
     expect(diff.collections["knowledge_base"]).toBeDefined();
-    expect(diff.collections["knowledge_base"].added).toHaveLength(1);
+    expect(diff.collections["knowledge_base"]!.added).toHaveLength(1);
 
     // Merge and verify updated vector survived
     const mergeResult = await mergeEngine.merge("re-embed", "main");
@@ -217,18 +217,18 @@ describe("Stress: real Voyage AI embeddings through branch lifecycle", () => {
       await proxy.insertOne("user-vectors", "user_profiles", {
         name: seedNames[i],
         bio: userBios[i],
-        bio_embedding: bioEmbeddings[i].embedding,
+        bio_embedding: bioEmbeddings[i]!.embedding,
         embeddedAt: new Date(),
       });
     }
 
     // Developers more similar to each other than to designer
-    const bobDavidSim = cosineSimilarity(bioEmbeddings[1].embedding, bioEmbeddings[3].embedding);
-    const bobCarolSim = cosineSimilarity(bioEmbeddings[1].embedding, bioEmbeddings[2].embedding);
+    const bobDavidSim = cosineSimilarity(bioEmbeddings[1]!.embedding, bioEmbeddings[3]!.embedding);
+    const bobCarolSim = cosineSimilarity(bioEmbeddings[1]!.embedding, bioEmbeddings[2]!.embedding);
     expect(bobDavidSim).toBeGreaterThan(bobCarolSim);
 
     const diff = await diffEngine.diffBranches("user-vectors", "main");
-    expect(diff.collections["user_profiles"].added).toHaveLength(4);
+    expect(diff.collections["user_profiles"]!.added).toHaveLength(4);
 
     const mergeResult = await mergeEngine.merge("user-vectors", "main");
     expect(mergeResult.success).toBe(true);
@@ -266,8 +266,8 @@ describe("Stress: hybrid search data with real embeddings", () => {
     for (let i = 0; i < movieDocs.length; i++) {
       await proxy.insertOne("hybrid-real", "movies", {
         ...movieDocs[i],
-        plot_embedding: movieEmbeddings[i].embedding,
-        embeddingModel: movieEmbeddings[i].model,
+        plot_embedding: movieEmbeddings[i]!.embedding,
+        embeddingModel: movieEmbeddings[i]!.model,
       });
     }
 
@@ -280,13 +280,13 @@ describe("Stress: hybrid search data with real embeddings", () => {
     }
 
     // Sci-fi movies more similar to each other than to tech drama
-    const sciFiSim = cosineSimilarity(movieEmbeddings[0].embedding, movieEmbeddings[2].embedding);
-    const crossSim = cosineSimilarity(movieEmbeddings[0].embedding, movieEmbeddings[1].embedding);
+    const sciFiSim = cosineSimilarity(movieEmbeddings[0]!.embedding, movieEmbeddings[2]!.embedding);
+    const crossSim = cosineSimilarity(movieEmbeddings[0]!.embedding, movieEmbeddings[1]!.embedding);
     expect(sciFiSim).toBeGreaterThan(crossSim);
 
     // Diff and merge
     const diff = await diffEngine.diffBranches("hybrid-real", "main");
-    expect(diff.collections["movies"].added).toHaveLength(3);
+    expect(diff.collections["movies"]!.added).toHaveLength(3);
 
     const mergeResult = await mergeEngine.merge("hybrid-real", "main");
     expect(mergeResult.success).toBe(true);
@@ -325,7 +325,7 @@ describe("Stress: hybrid search data with real embeddings", () => {
     // Diff only shows materialized AI collection, NOT seed data
     const diff = await diffEngine.diffBranches("ai-lazy-real", "main");
     expect(diff.collections["ai_experiments"]).toBeDefined();
-    expect(diff.collections["ai_experiments"].added).toHaveLength(1);
+    expect(diff.collections["ai_experiments"]!.added).toHaveLength(1);
     expect(diff.collections["users"]).toBeUndefined();
     expect(diff.collections["products"]).toBeUndefined();
     expect(diff.collections["orders"]).toBeUndefined();
@@ -360,7 +360,7 @@ describe("Stress: hybrid search data with real embeddings", () => {
     await branchManager.createBranch({ name: "seq-a-vectors" });
     for (let i = 0; i < productTexts.length; i++) {
       await proxy.insertOne("seq-a-vectors", "product_embeddings", {
-        text: productTexts[i], embedding: productEmbs[i].embedding, source: "branch-a",
+        text: productTexts[i], embedding: productEmbs[i]!.embedding, source: "branch-a",
       });
     }
 
@@ -368,7 +368,7 @@ describe("Stress: hybrid search data with real embeddings", () => {
     await branchManager.createBranch({ name: "seq-b-vectors" });
     for (let i = 0; i < userTexts.length; i++) {
       await proxy.insertOne("seq-b-vectors", "user_embeddings", {
-        text: userTexts[i], embedding: userEmbs[i].embedding, source: "branch-b",
+        text: userTexts[i], embedding: userEmbs[i]!.embedding, source: "branch-b",
       });
     }
 

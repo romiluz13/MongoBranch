@@ -119,7 +119,7 @@ describe("CommitEngine.commit", () => {
     expect(collections.length).toBeGreaterThan(0);
 
     for (const name of collections) {
-      const snap = commit.snapshot.collections[name];
+      const snap = commit.snapshot.collections[name]!;
       expect(snap.documentCount).toBeGreaterThan(0);
       expect(snap.checksum).toBeDefined();
       expect(snap.checksum.length).toBe(16); // truncated SHA-256
@@ -158,9 +158,9 @@ describe("CommitEngine.getLog", () => {
 
     const log = await commitEngine.getLog("feat-log");
     expect(log.commits).toHaveLength(3);
-    expect(log.commits[0].message).toBe("Commit 3"); // Most recent first
-    expect(log.commits[1].message).toBe("Commit 2");
-    expect(log.commits[2].message).toBe("Commit 1");
+    expect(log.commits[0]!.message).toBe("Commit 3"); // Most recent first
+    expect(log.commits[1]!.message).toBe("Commit 2");
+    expect(log.commits[2]!.message).toBe("Commit 1");
   });
 
   it("returns empty log for branch with no commits", async () => {
@@ -178,7 +178,7 @@ describe("CommitEngine.getLog", () => {
 
     const log = await commitEngine.getLog("feat-limit", 2);
     expect(log.commits).toHaveLength(2);
-    expect(log.commits[0].message).toBe("Commit 4"); // Most recent
+    expect(log.commits[0]!.message).toBe("Commit 4"); // Most recent
   });
 });
 
@@ -426,8 +426,8 @@ describe("CommitEngine.cherryPick", () => {
     await commitEngine.cherryPick("cp-msg-tgt", pickMe.hash);
 
     const log = await commitEngine.getLog("cp-msg-tgt");
-    expect(log.commits[0].message).toContain("Cherry-pick");
-    expect(log.commits[0].message).toContain("Important change");
+    expect(log.commits[0]!.message).toContain("Cherry-pick");
+    expect(log.commits[0]!.message).toContain("Important change");
   });
 
   it("throws for non-existent commit hash", async () => {
@@ -470,8 +470,8 @@ describe("CommitEngine.revert", () => {
     await commitEngine.revert("rev-msg", toRevert.hash);
 
     const log = await commitEngine.getLog("rev-msg");
-    expect(log.commits[0].message).toContain("Revert");
-    expect(log.commits[0].message).toContain("Bad change");
+    expect(log.commits[0]!.message).toContain("Revert");
+    expect(log.commits[0]!.message).toContain("Bad change");
   });
 
   it("throws for non-existent commit hash", async () => {

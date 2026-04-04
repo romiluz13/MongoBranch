@@ -48,7 +48,7 @@ export async function generateEmbeddings(texts: string[]): Promise<EmbeddingResu
   };
 
   return data.data.map((item, i) => ({
-    text: texts[i],
+    text: texts[i]!,
     embedding: item.embedding,
     model: data.model,
     dimensions: item.embedding.length,
@@ -60,7 +60,7 @@ export async function generateEmbeddings(texts: string[]): Promise<EmbeddingResu
  */
 export async function generateEmbedding(text: string): Promise<number[]> {
   const results = await generateEmbeddings([text]);
-  return results[0].embedding;
+  return results[0]!.embedding;
 }
 
 /**
@@ -73,9 +73,9 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   let normA = 0;
   let normB = 0;
   for (let i = 0; i < a.length; i++) {
-    dotProduct += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
+    dotProduct += a[i]! * b[i]!;
+    normA += a[i]! * a[i]!;
+    normB += b[i]! * b[i]!;
   }
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }

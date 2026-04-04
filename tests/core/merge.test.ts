@@ -229,8 +229,8 @@ describe("MergeEngine.merge — conflict detection", () => {
     // Merge should detect the conflict
     const result = await mergeEngine.merge("conflict-src", "main", { detectConflicts: true });
     expect(result.conflicts.length).toBeGreaterThan(0);
-    expect(result.conflicts[0].documentId).toEqual(user!._id);
-    expect(result.conflicts[0].collection).toBe("users");
+    expect(result.conflicts[0]!.documentId).toEqual(user!._id);
+    expect(result.conflicts[0]!.collection).toBe("users");
   });
 
   it("applies non-conflicting changes even when conflicts exist (ours strategy)", async () => {

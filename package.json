@@ -1,6 +1,6 @@
 {
   "name": "mongobranch",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "Git-like branching, diffing, and merging for MongoDB data — built for AI agents",
   "module": "src/cli.ts",
   "type": "module",
@@ -30,8 +30,16 @@
     "./anonymize": "./src/core/anonymize.ts",
     "./reflog": "./src/core/reflog.ts",
     "./search-index": "./src/core/search-index.ts",
+    "./audit-chain": "./src/core/audit-chain.ts",
+    "./checkpoint": "./src/core/checkpoint.ts",
+    "./execution-guard": "./src/core/execution-guard.ts",
+    "./watcher": "./src/core/watcher.ts",
     "./mcp/tools": "./src/mcp/tools.ts",
     "./mcp/server": "./src/mcp/server.ts"
+  },
+  "engines": {
+    "node": ">=18",
+    "bun": ">=1.0"
   },
   "scripts": {
     "start": "bun src/cli.ts",
@@ -60,7 +68,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/rom-iluz/mongobranch"
+    "url": "https://github.com/romiluz13/MongoBranch.git"
   },
   "author": "Rom Iluz <rom@iluz.net>",
   "devDependencies": {

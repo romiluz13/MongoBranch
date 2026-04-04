@@ -49,8 +49,8 @@ beforeEach(async () => {
 describe("MCP Tools — create_branch", () => {
   it("creates a branch and returns success", async () => {
     const result = await tools.create_branch({ name: "feature-x" });
-    expect(result.content[0].type).toBe("text");
-    const text = result.content[0].text;
+    expect(result.content[0]!.type).toBe("text");
+    const text = result.content[0]!.text;
     expect(text).toContain("feature-x");
     expect(text).toContain("created");
   });
@@ -70,7 +70,7 @@ describe("MCP Tools — create_branch", () => {
 describe("MCP Tools — list_branches", () => {
   it("returns empty list when no branches", async () => {
     const result = await tools.list_branches({});
-    const text = result.content[0].text;
+    const text = result.content[0]!.text;
     const parsed = JSON.parse(text);
     expect(parsed.branches).toEqual([]);
   });
@@ -79,7 +79,7 @@ describe("MCP Tools — list_branches", () => {
     await tools.create_branch({ name: "alpha" });
     await tools.create_branch({ name: "beta" });
     const result = await tools.list_branches({});
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(result.content[0]!.text);
     expect(parsed.branches.length).toBe(2);
     expect(parsed.branches.map((b: any) => b.name).sort()).toEqual(["alpha", "beta"]);
   });
@@ -89,7 +89,7 @@ describe("MCP Tools — diff_branch", () => {
   it("returns no changes for unmodified branch", async () => {
     await tools.create_branch({ name: "clean" });
     const result = await tools.diff_branch({ source: "clean", target: "main" });
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(result.content[0]!.text);
     expect(parsed.totalChanges).toBe(0);
   });
 
@@ -103,7 +103,7 @@ describe("MCP Tools — diff_branch", () => {
     });
 
     const result = await tools.diff_branch({ source: "add-test", target: "main" });
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(result.content[0]!.text);
     expect(parsed.totalChanges).toBeGreaterThan(0);
   });
 
@@ -123,7 +123,7 @@ describe("MCP Tools — merge_branch", () => {
     });
 
     const result = await tools.merge_branch({ source: "merge-me", into: "main" });
-    const text = result.content[0].text;
+    const text = result.content[0]!.text;
     expect(text).toContain("Merged");
     expect(result.isError).toBeUndefined();
   });
@@ -138,12 +138,12 @@ describe("MCP Tools — delete_branch", () => {
   it("deletes a branch and returns confirmation", async () => {
     await tools.create_branch({ name: "to-delete" });
     const result = await tools.delete_branch({ name: "to-delete" });
-    expect(result.content[0].text).toContain("deleted");
+    expect(result.content[0]!.text).toContain("deleted");
     expect(result.isError).toBeUndefined();
 
     // Verify it's gone from list
     const listResult = await tools.list_branches({});
-    const parsed = JSON.parse(listResult.content[0].text);
+    const parsed = JSON.parse(listResult.content[0]!.text);
     expect(parsed.branches.find((b: any) => b.name === "to-delete")).toBeUndefined();
   });
 
@@ -166,8 +166,8 @@ describe("MCP Tools — register_agent", () => {
       agentId: "claude-1",
       name: "Claude Code",
     });
-    expect(result.content[0].text).toContain("claude-1");
-    expect(result.content[0].text).toContain("registered");
+    expect(result.content[0]!.text).toContain("claude-1");
+    expect(result.content[0]!.text).toContain("registered");
   });
 
   it("returns error for duplicate agent", async () => {
@@ -184,8 +184,8 @@ describe("MCP Tools — create_agent_branch", () => {
       agentId: "agent-m",
       task: "fix-data",
     });
-    expect(result.content[0].text).toContain("agent-m/fix-data");
-    expect(result.content[0].text).toContain("created");
+    expect(result.content[0]!.text).toContain("agent-m/fix-data");
+    expect(result.content[0]!.text).toContain("created");
   });
 
   it("returns error for unregistered agent", async () => {
@@ -203,7 +203,7 @@ describe("MCP Tools — agent_status", () => {
     await tools.create_agent_branch({ agentId: "stat-agent", task: "t1" });
 
     const result = await tools.agent_status({ agentId: "stat-agent" });
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(result.content[0]!.text);
     expect(parsed.agentId).toBe("stat-agent");
     expect(parsed.activeBranches).toBe(1);
   });
@@ -222,7 +222,7 @@ describe("MCP Tools — start_task", () => {
       agentId: "workflow-agent",
       task: "migrate-users",
     });
-    const text = result.content[0].text;
+    const text = result.content[0]!.text;
     expect(text).toContain("workflow-agent/migrate-users");
     expect(text).toContain("created");
     expect(result.isError).toBeUndefined();
@@ -232,7 +232,7 @@ describe("MCP Tools — start_task", () => {
     await tools.start_task({ agentId: "repeat-agent", task: "task-1" });
     const result = await tools.start_task({ agentId: "repeat-agent", task: "task-2" });
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toContain("repeat-agent/task-2");
+    expect(result.content[0]!.text).toContain("repeat-agent/task-2");
   });
 });
 
@@ -251,7 +251,7 @@ describe("MCP Tools — complete_task", () => {
       agentId: "done-agent",
       task: "cleanup",
     });
-    const text = result.content[0].text;
+    const text = result.content[0]!.text;
     expect(text).toContain("totalChanges");
     expect(result.isError).toBeUndefined();
   });
@@ -269,7 +269,7 @@ describe("MCP Tools — complete_task", () => {
       task: "fix",
       autoMerge: true,
     });
-    const text = result.content[0].text;
+    const text = result.content[0]!.text;
     expect(text).toContain("Merged");
     expect(result.isError).toBeUndefined();
 

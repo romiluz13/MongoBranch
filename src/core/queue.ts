@@ -69,7 +69,7 @@ export class MergeQueue {
     // Atomically claim the oldest pending entry
     const entry = await this.queue.findOneAndUpdate(
       { status: "pending" },
-      { $set: { status: "processing" as MergeQueueStatus, processedAt: new Date() } },
+      { $set: { status: "processing" as MergeQueueStatus }, $currentDate: { processedAt: true } },
       { sort: { queuedAt: 1 }, returnDocument: "after" }
     );
 
@@ -84,7 +84,7 @@ export class MergeQueue {
 
       await this.queue.updateOne(
         { _id: entry._id },
-        { $set: { status: "completed" as MergeQueueStatus, completedAt: new Date(), result } }
+        { $set: { status: "completed" as MergeQueueStatus, result }, $currentDate: { completedAt: true } }
       );
 
       return { ...entry, status: "completed", result };
@@ -92,7 +92,7 @@ export class MergeQueue {
       const msg = err instanceof Error ? err.message : String(err);
       await this.queue.updateOne(
         { _id: entry._id },
-        { $set: { status: "failed" as MergeQueueStatus, completedAt: new Date(), error: msg } }
+        { $set: { status: "failed" as MergeQueueStatus, error: msg }, $currentDate: { completedAt: true } }
       );
       return { ...entry, status: "failed", error: msg };
     }

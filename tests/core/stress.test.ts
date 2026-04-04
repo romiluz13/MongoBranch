@@ -141,7 +141,7 @@ describe("Stress: large documents", () => {
     const diff = await diffEngine.diffBranches("large-docs", "main");
     const stressDiff = diff.collections["stress_col"];
     expect(stressDiff).toBeDefined();
-    expect(stressDiff.added.length).toBe(1);
+    expect(stressDiff!.added.length).toBe(1);
   });
 });
 
@@ -190,7 +190,7 @@ describe("Stress: rapid CRUD operations", () => {
     // Diff should show all changes vs main
     const diff = await diffEngine.diffBranches("rapid-crud", "main");
     expect(diff.collections["stress_items"]).toBeDefined();
-    expect(diff.collections["stress_items"].added.length).toBe(40);
+    expect(diff.collections["stress_items"]!.added.length).toBe(40);
   }, 30_000);
 });
 
@@ -260,7 +260,7 @@ describe("Stress: lazy CoW branch lifecycle", () => {
     // Diff should only show changes in materialized collection
     const diff = await diffEngine.diffBranches("lazy-full", "main");
     expect(diff.collections["products"]).toBeDefined();
-    expect(diff.collections["products"].added.length).toBe(1);
+    expect(diff.collections["products"]!.added.length).toBe(1);
     // Non-materialized collections should NOT appear in diff
     expect(diff.collections["users"]).toBeUndefined();
 
@@ -306,8 +306,8 @@ describe("Stress: full agent lifecycle", () => {
     // 3. Agent reviews the diff
     const diff = await diffEngine.diffBranches("agent-x/price-update", "main");
     expect(diff.totalChanges).toBeGreaterThan(0);
-    expect(diff.collections["products"].modified.length).toBe(2);
-    expect(diff.collections["products"].added.length).toBe(1);
+    expect(diff.collections["products"]!.modified.length).toBe(2);
+    expect(diff.collections["products"]!.added.length).toBe(1);
 
     // 4. Agent checks the oplog
     const summary = await oplog.getOpSummary("agent-x/price-update");

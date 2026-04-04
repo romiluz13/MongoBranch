@@ -63,8 +63,8 @@ describe("HistoryManager.recordSnapshot", () => {
 
     const log = await history.getBranchLog("test-branch");
     expect(log.entries).toHaveLength(1);
-    expect(log.entries[0].event).toBe("branch_created");
-    expect(log.entries[0].timestamp).toBeInstanceOf(Date);
+    expect(log.entries[0]!.event).toBe("branch_created");
+    expect(log.entries[0]!.timestamp).toBeInstanceOf(Date);
   });
 
   it("records multiple events in order", async () => {
@@ -118,7 +118,7 @@ describe("HistoryManager.getBranchLog", () => {
     const logB = await history.getBranchLog("branch-b");
     expect(logA.entries).toHaveLength(1);
     expect(logB.entries).toHaveLength(1);
-    expect(logA.entries[0].summary).toBe("A created");
+    expect(logA.entries[0]!.summary).toBe("A created");
   });
 });
 

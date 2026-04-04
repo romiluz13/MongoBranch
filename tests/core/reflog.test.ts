@@ -14,6 +14,7 @@ let client: MongoClient;
 let reflog: ReflogManager;
 
 const config: MongoBranchConfig = {
+  uri: "",
   sourceDatabase: "test_reflog_source",
   metaDatabase: "__mongobranch_reflog",
   branchPrefix: "__mb_reflog_",
@@ -64,8 +65,8 @@ describe("ReflogManager — record & query", () => {
 
     const entries = await reflog.forBranch("feature-x");
     expect(entries.length).toBe(2);
-    expect(entries[0].action).toBe("commit"); // newest first
-    expect(entries[1].action).toBe("create");
+    expect(entries[0]!.action).toBe("commit"); // newest first
+    expect(entries[1]!.action).toBe("create");
   });
 
   it("tracks branch across deletion (survives delete)", async () => {

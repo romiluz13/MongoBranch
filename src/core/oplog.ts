@@ -38,6 +38,11 @@ export class OperationLog {
   async initialize(): Promise<void> {
     await this.oplog.createIndex({ branchName: 1, timestamp: 1 });
     await this.oplog.createIndex({ branchName: 1, collection: 1 });
+    // TTL: auto-expire oplog entries after 30 days to prevent unbounded growth
+    await this.oplog.createIndex(
+      { timestamp: 1 },
+      { expireAfterSeconds: 30 * 24 * 60 * 60 }
+    ).catch(() => {}); // May conflict with existing timestamp index
   }
 
   /**
@@ -127,18 +132,21 @@ export class OperationLog {
       const coll = branchDb.collection(op.collection);
       try {
         if (op.operation === "insert" && op.after) {
-          await coll.deleteOne({ _id: op.after._id });
+          await coll.deleteOne({ _id: op.after._id as any });
           undone++;
         } else if (op.operation === "delete" && op.before) {
           await coll.insertOne(op.before);
           undone++;
         } else if (op.operation === "update" && op.before) {
-          await coll.replaceOne({ _id: op.before._id }, op.before);
+          await coll.replaceOne({ _id: op.before._id as any }, op.before);
           undone++;
         }
         // Remove the op from the log
         await this.oplog.deleteOne({ _id: op._id });
-      } catch { /* best effort undo */ }
+      } catch (err) {
+        // Best effort undo — log but don't abort remaining undo ops
+        console.warn(`[Oplog] undo failed for op ${op._id}:`, err instanceof Error ? err.message : err);
+      }
     }
 
     return undone;

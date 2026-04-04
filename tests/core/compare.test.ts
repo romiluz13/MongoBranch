@@ -16,6 +16,7 @@ let branchManager: BranchManager;
 let comparator: BranchComparator;
 
 const config: MongoBranchConfig = {
+  uri: "",
   sourceDatabase: "test_compare_source",
   metaDatabase: "__mongobranch_compare",
   branchPrefix: "__mb_cmp_",

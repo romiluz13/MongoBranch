@@ -25,7 +25,7 @@ import {
 import { SEED_DATABASE } from "../seed.js";
 import { SearchIndexManager } from "../../src/core/search-index.js";
 import { BranchManager } from "../../src/core/branch.js";
-import { MongoBranchConfig, MAIN_BRANCH } from "../../src/core/types.js";
+import { type MongoBranchConfig, MAIN_BRANCH } from "../../src/core/types.js";
 
 let client: MongoClient;
 let config: MongoBranchConfig;
@@ -37,6 +37,7 @@ beforeAll(async () => {
   const env = await startMongoDB();
   client = env.client;
   config = {
+    uri: "",
     sourceDatabase: SEED_DATABASE,
     metaDatabase: "__mongobranch",
     branchPrefix: "__mb_",

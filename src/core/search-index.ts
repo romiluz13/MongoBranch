@@ -7,15 +7,15 @@
  * Requires Atlas Local (mongodb-atlas-local:preview) which includes mongot.
  */
 
-import { MongoClient, Db } from "mongodb";
+import { type MongoClient, type Db } from "mongodb";
 import {
-  MongoBranchConfig,
-  SearchIndexDefinition,
-  SearchIndexDiff,
-  SearchIndexModification,
-  SearchIndexCopyResult,
-  SearchIndexMergeResult,
-  SearchIndexType,
+  type MongoBranchConfig,
+  type SearchIndexDefinition,
+  type SearchIndexDiff,
+  type SearchIndexModification,
+  type SearchIndexCopyResult,
+  type SearchIndexMergeResult,
+  type SearchIndexType,
   MAIN_BRANCH,
   META_COLLECTION,
 } from "./types.js";
@@ -50,7 +50,8 @@ export class SearchIndexManager {
         const cursor = db.collection(coll).listSearchIndexes();
         const indexes = await cursor.toArray();
 
-        for (const idx of indexes) {
+        for (const raw of indexes) {
+          const idx = raw as any;
           results.push({
             name: idx.name ?? "default",
             type: (idx.type as SearchIndexType) ?? "search",

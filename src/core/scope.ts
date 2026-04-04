@@ -35,6 +35,11 @@ export class ScopeManager {
   async initialize(): Promise<void> {
     await this.scopes.createIndex({ agentId: 1 }, { unique: true });
     await this.violations.createIndex({ agentId: 1, timestamp: -1 });
+    // TTL: auto-expire scope violation records after 30 days
+    await this.violations.createIndex(
+      { timestamp: 1 },
+      { expireAfterSeconds: 30 * 24 * 60 * 60 }
+    ).catch(() => {});
   }
 
   /**

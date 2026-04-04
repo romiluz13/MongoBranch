@@ -1,5 +1,32 @@
 # Architecture Decisions Log
 
+## 2026-04-02: MongoDB-Native Full Harmony Integration
+### Core Engine (P0)
+- **Transactions**: merge/threeWayMerge/cherryPick/revert wrapped in `session.withTransaction()`
+- **bulkWrite**: Batch operations in merge + cherryPick replace individual CRUD calls
+- **$graphLookup**: `getCommonAncestor()` — server-side ancestry traversal, O(2) round trips
+- **$merge**: `copyCollections()` + `materializeCollection()` — zero client memory copies
+- **findOneAndUpdate/Delete**: proxy.ts — atomic before-state capture (race condition fix)
+- **Bug fix**: `merge()` was passing `strategy` instead of `conflictStrategy`
+
+### Indexes & Validation (P1)
+- **Partial indexes**: `parentHashes` for graphLookup, deploy requests `status: open/approved`
+- **Collation**: Branch name unique index with `{locale:'en',strength:2}` — case-insensitive safety net
+- **TTL indexes**: Oplog 30d, reflog 90d, scope violations 30d — bounded growth
+- **$jsonSchema**: Branch metadata + commits collections validated (`moderate` level)
+
+### Server-Side Operations (P1)
+- **$currentDate**: All 13 `updatedAt: new Date()` replaced with server-side `$currentDate:{updatedAt:true}`
+- **$lookup**: `getBranchWithHead()` — join branch metadata + commit info in single query
+- **$collStats**: `getBranchStats()` — per-collection storage stats, doc counts, sizes
+- **estimatedDocumentCount**: `getBranchSummary()` — fast approximate branch totals
+
+### Ecosystem (P2)
+- **Change Streams**: `BranchWatcher` class with `fullDocument:updateLookup` + `fullDocumentBeforeChange:whenAvailable`
+- **CLIENT_OPTIONS**: `retryWrites:true`, `retryReads:true`, `w:"majority"`, `appName:"mongobranch"`
+
+### Test validation: All 247 tests pass across 24 files
+
 ## 2026-03-31: Wave 6 Complete — Time Travel, Blame, Deploy Requests
 - **Time Travel**: Snapshot-based, full doc state per commit, query at commit hash or timestamp
 - **Blame**: Backward commit walk with per-field tracking, findCreationCommit checks actual data
@@ -73,7 +100,7 @@
 - **Design**: Content-addressed SHA-256 hashes, parent chain, merge commits with two parents
 - **Stored in**: `__mongobranch.commits` collection with unique hash index
 - **Impact**: Commits become the backbone for all advanced features
-- **Status**: ⬜ Planned — Wave 4, Phase 4.1
+- **Status**: ✅ Implemented — Wave 4, Phase 4.1
 
 ## ADR-009: Three-Way Merge Algorithm
 - **Date**: 2026-03-31
@@ -83,7 +110,7 @@
 - **For MongoDB**: Primary key = `_id`, per-field conflict granularity, structured conflict table
 - **Conflict resolution**: `ours`, `theirs`, `custom` (provide specific value)
 - **Impact**: This is the #1 feature Neon lacks — makes MongoBranch a true VCS
-- **Status**: ⬜ Planned — Wave 4, Phase 4.3
+- **Status**: ✅ Implemented — Wave 4, Phase 4.3
 
 ## ADR-010: Branch TTL via MongoDB TTL Indexes
 - **Date**: 2026-03-31
@@ -91,7 +118,7 @@
 - **Context**: Agents leave orphan branches. Neon has branch TTL. lakeFS has garbage collection.
   MongoDB TTL indexes auto-delete documents when `expiresAt` passes — zero application-side cron.
 - **Gotcha**: TTL index only deletes the metadata doc. Need a poller/hook to also drop the branch DB.
-- **Status**: ⬜ Planned — Wave 5, Phase 5.1
+- **Status**: ✅ Implemented — Wave 5, Phase 5.1
 
 ## ADR-011: Hook System Design (Updated after lakeFS validation)
 - **Date**: 2026-03-31 (validated 2026-03-31)
@@ -105,7 +132,7 @@
 - **Execution**: Ordered by priority, first rejection stops the chain
 - **Hook context**: runId, eventType, branchName, user, diff summary, commit info
 - **Webhook support**: HTTP POST to external URLs (async, fire-and-forget for post-events)
-- **Status**: ⬜ Planned — Wave 5, Phase 5.4
+- **Status**: ✅ Implemented — Wave 5, Phase 5.4
 
 ## ADR-013: Three-Way Merge — 6-Step Process (Validated from Dolt)
 - **Date**: 2026-03-31
@@ -121,7 +148,7 @@
 - **Key insight from Dolt**: JSON columns auto-merge if different keys modified — directly maps to MongoDB embedded documents
 - **MongoDB adaptation**: No Prolly Trees needed — use oplog diffs + snapshot comparison
 - **Conflict granularity**: Per-field within a document (not per-document)
-- **Status**: ⬜ Planned — Wave 4, Phase 4.3
+- **Status**: ✅ Implemented — Wave 4, Phase 4.3
 
 ## ADR-014: PII Anonymization Strategy (Validated from Neon)
 - **Date**: 2026-03-31
@@ -131,7 +158,7 @@
 - **Strategies**: hash (SHA-256), mask (***), faker (realistic fake), null, custom function
 - **V2 (Dynamic, future)**: Query-time masking, no storage delta, zero additional cost
 - **MongoDB adaptation**: Use aggregation pipeline with $addFields for dynamic, $merge for static
-- **Status**: ⬜ Planned — Wave 7, Phase 7.4
+- **Status**: ✅ Implemented — Wave 7, Phase 7.4
 
 ## ADR-012: Competitive Positioning
 - **Date**: 2026-03-31

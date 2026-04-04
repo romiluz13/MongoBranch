@@ -79,7 +79,7 @@ export class AgentManager {
     // Update agent last active timestamp
     await this.agentsCollection.updateOne(
       { agentId },
-      { $set: { lastActiveAt: new Date() } }
+      { $currentDate: { lastActiveAt: true } }
     );
 
     return this.branchManager.createBranch({

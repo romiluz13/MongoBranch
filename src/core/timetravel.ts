@@ -175,8 +175,8 @@ export class TimeTravelEngine {
           if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
             if (!fields[key]) fields[key] = [];
             // The NEWER commit changed this field
-            const newerCommit = commitChain[commitChain.indexOf(commit) - 1] ?? commitChain[0];
-            fields[key].push({
+            const newerCommit = commitChain[commitChain.indexOf(commit) - 1] ?? commitChain[0]!;
+            fields[key]!.push({
               field: key,
               value: newVal,
               commitHash: newerCommit.hash,
@@ -240,14 +240,14 @@ export class TimeTravelEngine {
     for (let i = chain.length - 1; i >= 0; i--) {
       const commit = chain[i];
       const snapshot = await this.commitData.findOne({
-        commitHash: commit.hash,
+        commitHash: commit!.hash,
         collection,
       });
       if (snapshot) {
         const found = snapshot.documents.find(
           (d: Record<string, unknown>) => String((d as any)._id) === String(documentId)
         );
-        if (found) return commit;
+        if (found) return commit ?? null;
       }
     }
     // Fallback to oldest commit

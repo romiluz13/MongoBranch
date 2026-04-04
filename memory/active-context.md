@@ -1,16 +1,13 @@
 # Active Context
 
-## Current State (2026-03-31)
+## Current State (2026-04-04)
 
-### Wave 4-8 Roadmap Validated & Complete
-- Deep competitive analysis done: Neon, Dolt, lakeFS, PlanetScale, Xata
-- **Critical finding**: Neon branches are ONE-WAY (no merge, no diff) — MongoBranch fills this gap
-- **Dolt's three-way merge algorithm** studied in detail (6-step process validated from engineering blog)
-- **lakeFS hooks** validated: 18 event types, pre-hooks reject (sync), post-hooks fire-and-forget
-- **Neon PII anonymization** validated: static masking v1, dynamic masking planned
-- Roadmap expanded from v0.7.0 → v1.1.0 with 5 new waves, ~40 features, ~240 total tests
-- Phase 5.4 hooks expanded from 6 → 14 event types based on lakeFS validation
-- GitHub pushed: https://github.com/romiluz13/MongoBranch
+### v1.0.0 PUBLISHED — Production Ready
+- **npm**: `mongobranch` v1.0.0 live on npmjs.com
+- **GitHub**: https://github.com/romiluz13/MongoBranch
+- **Stats**: 308 tests · 78 MCP tools · 44 CLI commands · 22 engines · 0 mocks
+- **All 10 waves complete** — branching, commits, diff, merge, time travel, deploy requests, agent scoping, anonymization, search indexes, CI/CD
+- **v1.0.1 in progress**: Added 5 database operations (aggregate, count, listCollections, updateMany, inferSchema) to close gaps vs MongoDB MCP Server
 
 ### ✅ Phase 4.1: Commit Engine — COMPLETE
 - `CommitEngine` class in `src/core/commit.ts` — 255 lines

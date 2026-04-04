@@ -18,6 +18,7 @@ let branchManager: BranchManager;
 let deployManager: DeployRequestManager;
 
 const config: MongoBranchConfig = {
+  uri: "",
   sourceDatabase: "test_deploy_source",
   metaDatabase: "__mongobranch_deploy",
   branchPrefix: "__mb_dr_",
@@ -238,11 +239,11 @@ describe("DeployRequest — list & get", () => {
 
     const openDRs = await deployManager.list({ status: "open" });
     expect(openDRs.length).toBe(1);
-    expect(openDRs[0].description).toBe("DR 1");
+    expect(openDRs[0]!.description).toBe("DR 1");
 
     const approvedDRs = await deployManager.list({ status: "approved" });
     expect(approvedDRs.length).toBe(1);
-    expect(approvedDRs[0].description).toBe("DR 2");
+    expect(approvedDRs[0]!.description).toBe("DR 2");
 
     const allDRs = await deployManager.list();
     expect(allDRs.length).toBe(2);

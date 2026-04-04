@@ -14,6 +14,7 @@ let client: MongoClient;
 let scopeManager: ScopeManager;
 
 const config: MongoBranchConfig = {
+  uri: "",
   sourceDatabase: "test_scope_source",
   metaDatabase: "__mongobranch_scope",
   branchPrefix: "__mb_scope_",

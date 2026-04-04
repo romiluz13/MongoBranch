@@ -96,7 +96,7 @@ export class AnonymizeEngine {
       case "mask":
         if (str.includes("@")) {
           // Email: mask local part
-          const [local, domain] = str.split("@");
+          const [local, domain] = str.split("@") as [string, string];
           return `${local[0]}${"*".repeat(Math.max(local.length - 2, 1))}${local.slice(-1)}@${domain}`;
         }
         if (str.length <= 2) return "*".repeat(str.length);

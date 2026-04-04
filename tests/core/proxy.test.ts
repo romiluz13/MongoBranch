@@ -60,12 +60,12 @@ describe("BranchProxy.insertOne", () => {
     // Verify the document exists
     const docs = await proxy.find("proxy-ins", "test_col", { name: "Alice" });
     expect(docs).toHaveLength(1);
-    expect(docs[0].name).toBe("Alice");
+    expect(docs[0]!.name).toBe("Alice");
 
     // Verify operation was logged
     const ops = await oplog.getBranchOps("proxy-ins");
     expect(ops).toHaveLength(1);
-    expect(ops[0].operation).toBe("insert");
+    expect(ops[0]!.operation).toBe("insert");
   });
 });
 
@@ -84,14 +84,14 @@ describe("BranchProxy.updateOne", () => {
 
     // Verify updated
     const docs = await proxy.find("proxy-upd", "test_col", { name: "Bob" });
-    expect(docs[0].age).toBe(30);
+    expect(docs[0]!.age).toBe(30);
 
     // Verify oplog has both insert and update
     const ops = await oplog.getBranchOps("proxy-upd");
     expect(ops).toHaveLength(2);
-    expect(ops[1].operation).toBe("update");
-    expect(ops[1].before?.age).toBe(25);
-    expect(ops[1].after?.age).toBe(30);
+    expect(ops[1]!.operation).toBe("update");
+    expect(ops[1]!.before?.age).toBe(25);
+    expect(ops[1]!.after?.age).toBe(30);
   });
 });
 
@@ -151,5 +151,134 @@ describe("BranchProxy.find — lazy branch reads", () => {
     const mainDb = client.db(SEED_DATABASE);
     const mainCount = await mainDb.collection("users").countDocuments();
     expect(docs.length).toBe(mainCount);
+  });
+});
+
+describe("BranchProxy.aggregate", () => {
+  it("runs an aggregation pipeline on a branch collection", async () => {
+    await branchManager.createBranch({ name: "proxy-agg" });
+    await proxy.insertOne("proxy-agg", "items", { name: "A", price: 10 });
+    await proxy.insertOne("proxy-agg", "items", { name: "B", price: 20 });
+    await proxy.insertOne("proxy-agg", "items", { name: "C", price: 30 });
+
+    const result = await proxy.aggregate("proxy-agg", "items", [
+      { $group: { _id: null, total: { $sum: "$price" } } },
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.total).toBe(60);
+  });
+
+  it("reads from source for unmaterialized lazy branches", async () => {
+    await branchManager.createBranch({ name: "proxy-agg-lazy", lazy: true });
+
+    const result = await proxy.aggregate("proxy-agg-lazy", "users", [
+      { $count: "total" },
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.total).toBeGreaterThan(0);
+  });
+});
+
+describe("BranchProxy.countDocuments", () => {
+  it("counts all documents in a branch collection", async () => {
+    await branchManager.createBranch({ name: "proxy-cnt" });
+    await proxy.insertOne("proxy-cnt", "items", { name: "A" });
+    await proxy.insertOne("proxy-cnt", "items", { name: "B" });
+    await proxy.insertOne("proxy-cnt", "items", { name: "C" });
+
+    const count = await proxy.countDocuments("proxy-cnt", "items");
+    expect(count).toBe(3);
+  });
+
+  it("counts documents matching a filter", async () => {
+    await branchManager.createBranch({ name: "proxy-cnt-f" });
+    await proxy.insertOne("proxy-cnt-f", "items", { name: "A", active: true });
+    await proxy.insertOne("proxy-cnt-f", "items", { name: "B", active: false });
+    await proxy.insertOne("proxy-cnt-f", "items", { name: "C", active: true });
+
+    const count = await proxy.countDocuments("proxy-cnt-f", "items", { active: true });
+    expect(count).toBe(2);
+  });
+});
+
+describe("BranchProxy.listCollections", () => {
+  it("lists collections on a branch", async () => {
+    await branchManager.createBranch({ name: "proxy-lc" });
+    await proxy.insertOne("proxy-lc", "col_a", { x: 1 });
+    await proxy.insertOne("proxy-lc", "col_b", { y: 2 });
+
+    const cols = await proxy.listCollections("proxy-lc");
+    const names = cols.map((c) => c.name);
+    expect(names).toContain("col_a");
+    expect(names).toContain("col_b");
+  });
+
+  it("merges parent + materialized collections for lazy branches", async () => {
+    await branchManager.createBranch({ name: "proxy-lc-lazy", lazy: true });
+    // Lazy branch should see source collections without writing
+    const cols = await proxy.listCollections("proxy-lc-lazy");
+    const names = cols.map((c) => c.name);
+    expect(names).toContain("users");
+  });
+
+  it("filters out _mongobranch_meta", async () => {
+    await branchManager.createBranch({ name: "proxy-lc-meta" });
+    const cols = await proxy.listCollections("proxy-lc-meta");
+    const names = cols.map((c) => c.name);
+    expect(names).not.toContain("_mongobranch_meta");
+  });
+});
+
+describe("BranchProxy.updateMany", () => {
+  it("updates multiple documents and records oplog", async () => {
+    await branchManager.createBranch({ name: "proxy-um" });
+    await proxy.insertOne("proxy-um", "items", { category: "a", status: "draft" });
+    await proxy.insertOne("proxy-um", "items", { category: "a", status: "draft" });
+    await proxy.insertOne("proxy-um", "items", { category: "b", status: "draft" });
+
+    const result = await proxy.updateMany(
+      "proxy-um", "items",
+      { category: "a" },
+      { $set: { status: "published" } },
+      "test-user"
+    );
+    expect(result.matchedCount).toBe(2);
+    expect(result.modifiedCount).toBe(2);
+
+    // Verify the docs were updated
+    const docs = await proxy.find("proxy-um", "items", { status: "published" });
+    expect(docs).toHaveLength(2);
+
+    // Verify oplog recorded the batch
+    const ops = await oplog.getBranchOps("proxy-um");
+    const batchOp = ops.find((o) => o.documentId?.startsWith("batch:"));
+    expect(batchOp).toBeDefined();
+    expect(batchOp!.performedBy).toBe("test-user");
+  });
+
+  it("rejects writes to read-only branches", async () => {
+    await branchManager.createBranch({ name: "proxy-um-ro", readOnly: true });
+    await expect(
+      proxy.updateMany("proxy-um-ro", "items", {}, { $set: { x: 1 } })
+    ).rejects.toThrow(/read-only/i);
+  });
+});
+
+describe("BranchProxy.inferSchema", () => {
+  it("infers schema from branch collection documents", async () => {
+    await branchManager.createBranch({ name: "proxy-sch" });
+    await proxy.insertOne("proxy-sch", "items", { name: "A", price: 10, tags: ["x"] });
+    await proxy.insertOne("proxy-sch", "items", { name: "B", price: 20, active: true });
+
+    const schema = await proxy.inferSchema("proxy-sch", "items");
+    expect(schema.totalSampled).toBe(2);
+    expect(schema.fields._id).toBeDefined();
+    expect(schema.fields._id!.types).toContain("objectId");
+    expect(schema.fields.name!.types).toContain("string");
+    expect(schema.fields.price!.types).toContain("number");
+    expect(schema.fields.tags!.types).toContain("array");
+    expect(schema.fields.tags!.count).toBe(1); // only 1 of 2 docs has tags
+    expect(schema.fields.active!.types).toContain("boolean");
+    expect(schema.fields.active!.count).toBe(1);
   });
 });

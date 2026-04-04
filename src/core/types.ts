@@ -17,6 +17,7 @@ export interface BranchMetadata {
   materializedCollections?: string[];
   headCommit?: string;  // SHA-256 hash of the latest commit on this branch
   expiresAt?: Date;     // TTL — branch auto-expires after this time
+  parentDepth?: number; // Nesting depth: 0 = from main, 1 = from branch, 2 = from sub-branch
 }
 
 export type BranchStatus = "active" | "merged" | "deleted" | "creating" | "error";
@@ -29,6 +30,9 @@ export interface BranchCreateOptions {
   readOnly?: boolean;
   lazy?: boolean;
   ttlMinutes?: number;  // Branch auto-expires after N minutes
+  maxDepth?: number;     // Max nesting depth (default 5). 0 = from main only
+  collections?: string[];   // Only copy these collections (partial branch)
+  schemaOnly?: boolean;     // Copy indexes + validators only, no data
 }
 
 export interface BranchListOptions {
@@ -71,6 +75,17 @@ export const DEFAULT_CONFIG: MongoBranchConfig = {
 export const MAIN_BRANCH = "main";
 export const META_COLLECTION = "branches";
 export const CHANGELOG_COLLECTION = "changelog";
+
+/**
+ * Recommended MongoClient options for MongoBranch.
+ * Applies retryable writes/reads, majority write concern, and appName.
+ */
+export const CLIENT_OPTIONS = {
+  retryWrites: true,
+  retryReads: true,
+  w: "majority" as const,
+  appName: "mongobranch",
+};
 
 // ── Diff Types ────────────────────────────────────────────────
 
@@ -143,7 +158,7 @@ export interface MergeOptions {
   conflictStrategy?: ConflictStrategy;
 }
 
-export type ConflictStrategy = "ours" | "theirs" | "abort";
+export type ConflictStrategy = "ours" | "theirs" | "abort" | "manual";
 
 export interface MergeConflict {
   collection: string;
@@ -218,6 +233,9 @@ export interface HookRegistration {
   priority: number;
   handler: string;  // Serialized handler ID or webhook URL
   isWebhook: boolean;
+  webhookSecret?: string;  // HMAC-SHA256 signing secret
+  webhookTimeout?: number; // Timeout in ms (default 5000)
+  webhookRetries?: number; // Number of retries (default 1)
   createdBy: string;
   createdAt: Date;
 }
@@ -538,4 +556,89 @@ export interface SearchIndexMergeResult {
   indexesRemoved: number;
   errors: { collection: string; indexName: string; error: string }[];
   success: boolean;
+}
+
+// ── Audit Chain Types (Wave 9 — EU AI Act Compliance) ────
+
+export const AUDIT_CHAIN_COLLECTION = "audit_chain";
+
+export type AuditEntryType =
+  | "oplog"
+  | "reflog"
+  | "branch"
+  | "merge"
+  | "deploy"
+  | "commit"
+  | "checkpoint"
+  | "genesis";
+
+export interface AuditChainEntry {
+  _id?: ObjectId;
+  entryId: string;        // nanoid
+  sequence: number;        // monotonic counter
+  entryType: AuditEntryType;
+  branchName: string;
+  actor: string;
+  action: string;
+  detail: string;
+  dataHash: string;        // SHA-256 of the detail payload
+  prevHash: string;        // chainHash of the previous entry (or "GENESIS")
+  chainHash: string;       // SHA-256(prevHash + dataHash + sequence)
+  timestamp: Date;
+}
+
+export interface AuditChainVerification {
+  valid: boolean;
+  totalEntries: number;
+  brokenAt?: number;       // sequence number where chain breaks
+  brokenReason?: string;
+  firstEntry?: AuditChainEntry;
+  lastEntry?: AuditChainEntry;
+}
+
+// ── Checkpoint Types (Wave 9 — Lightweight Save Points) ──
+
+export const CHECKPOINTS_COLLECTION = "checkpoints";
+
+export interface CheckpointEntry {
+  _id?: ObjectId;
+  id: string;              // short nanoid
+  branchName: string;
+  commitHash: string;      // auto-created commit
+  createdBy: string;
+  createdAt: Date;
+  expiresAt?: Date;
+  label?: string;
+  auto: boolean;
+}
+
+export interface CheckpointResult {
+  id: string;
+  branchName: string;
+  commitHash: string;
+  collectionsSnapshotted: number;
+  documentCount: number;
+}
+
+export interface RestoreResult {
+  branchName: string;
+  checkpointId: string;
+  collectionsRestored: number;
+  documentsRestored: number;
+  commitsRolledBack: number;
+}
+
+// ── Execution Guard Types (Wave 9 — Idempotent Agent Ops) ─
+
+export const EXECUTION_RECEIPTS_COLLECTION = "execution_receipts";
+
+export interface ExecutionReceipt {
+  _id?: ObjectId;
+  requestId: string;
+  toolName: string;
+  branchName: string;
+  argsHash: string;        // SHA-256 of serialized args
+  result: string;          // JSON-serialized tool result
+  executedAt: Date;
+  expiresAt: Date;
 }

@@ -74,7 +74,7 @@ describe("DiffEngine.diffBranches — document modifications", () => {
     expect(result.totalChanges).toBe(1);
     expect(result.collections["users"]).toBeTruthy();
     expect(result.collections["users"]!.added).toHaveLength(1);
-    expect(result.collections["users"]!.added[0].name).toBe("Eve Wilson");
+    expect(result.collections["users"]!.added[0]!.name).toBe("Eve Wilson");
   });
 
   it("detects deleted documents", async () => {
@@ -86,7 +86,7 @@ describe("DiffEngine.diffBranches — document modifications", () => {
     const result = await diffEngine.diffBranches("remove-user", "main");
     expect(result.totalChanges).toBe(1);
     expect(result.collections["users"]!.removed).toHaveLength(1);
-    expect(result.collections["users"]!.removed[0].name).toBe("David Okonkwo");
+    expect(result.collections["users"]!.removed[0]!.name).toBe("David Okonkwo");
   });
 
   it("detects modified documents with field-level diff", async () => {
@@ -103,9 +103,9 @@ describe("DiffEngine.diffBranches — document modifications", () => {
 
     const modified = result.collections["users"]!.modified;
     expect(modified).toHaveLength(1);
-    expect(modified[0].fields).toBeTruthy();
-    expect(modified[0].fields!["salary"]).toEqual({ from: 145000, to: 200000 });
-    expect(modified[0].fields!["role"]).toEqual({ from: "admin", to: "CTO" });
+    expect(modified[0]!.fields).toBeTruthy();
+    expect(modified[0]!.fields!["salary"]).toEqual({ from: 145000, to: 200000 });
+    expect(modified[0]!.fields!["role"]).toEqual({ from: "admin", to: "CTO" });
   });
 
   it("handles changes across multiple collections", async () => {
@@ -215,8 +215,8 @@ describe("DiffEngine.diffBranches — validation diff", () => {
     const result = await diffEngine.diffBranches("val-add", "main");
     expect(result.validationChanges).toBeDefined();
     expect(result.validationChanges!["users"]).toBeDefined();
-    expect(result.validationChanges!["users"].changed).toBe(true);
-    expect(result.validationChanges!["users"].source).not.toBeNull();
+    expect(result.validationChanges!["users"]!.changed).toBe(true);
+    expect(result.validationChanges!["users"]!.source).not.toBeNull();
   });
 
   it("returns no validationChanges when rules are identical", async () => {

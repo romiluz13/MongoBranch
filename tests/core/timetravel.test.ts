@@ -20,6 +20,7 @@ let commitEngine: CommitEngine;
 let timeTravelEngine: TimeTravelEngine;
 
 const config: MongoBranchConfig = {
+  uri: "",
   sourceDatabase: "test_timetravel_source",
   metaDatabase: "__mongobranch_timetravel",
   branchPrefix: "__mb_tt_",
@@ -201,13 +202,13 @@ describe("Blame — who changed what and when", () => {
 
     // Score was changed in commit2
     expect(result.fields.score).toBeDefined();
-    const scoreChange = result.fields.score.find(e => e.value === 200);
+    const scoreChange = result.fields.score!.find(e => e.value === 200);
     expect(scoreChange).toBeDefined();
     expect(scoreChange!.author).toBe("bob");
 
     // Role was changed in commit3
     expect(result.fields.role).toBeDefined();
-    const roleChange = result.fields.role.find(e => e.value === "superadmin");
+    const roleChange = result.fields.role!.find(e => e.value === "superadmin");
     expect(roleChange).toBeDefined();
     expect(roleChange!.author).toBe("charlie");
   });
@@ -229,7 +230,7 @@ describe("Blame — who changed what and when", () => {
 
     // Bob's name and role should be attributed to the initial commit
     expect(result.fields.name).toBeDefined();
-    expect(result.fields.name[0].commitHash).toBe(commit1.hash);
+    expect(result.fields.name![0]!.commitHash).toBe(commit1.hash);
   });
 
   it("tracks multiple changes to the same field across commits", async () => {
@@ -256,10 +257,10 @@ describe("Blame — who changed what and when", () => {
 
     // Score field should have 3 history entries (each change recorded)
     expect(result.fields.score).toBeDefined();
-    expect(result.fields.score.length).toBeGreaterThanOrEqual(3);
+    expect(result.fields.score!.length).toBeGreaterThanOrEqual(3);
 
     // Most recent should be dave's change
-    const latest = result.fields.score.find(e => e.value === 999);
+    const latest = result.fields.score!.find(e => e.value === 999);
     expect(latest).toBeDefined();
     expect(latest!.author).toBe("dave");
   });
@@ -284,7 +285,7 @@ describe("Blame — who changed what and when", () => {
 
     // All fields should be attributed to bob's commit
     expect(result.fields.name).toBeDefined();
-    expect(result.fields.name[0].author).toBe("bob");
-    expect(result.fields.role[0].value).toBe("guest");
+    expect(result.fields.name![0]!.author).toBe("bob");
+    expect(result.fields.role![0]!.value).toBe("guest");
   });
 });

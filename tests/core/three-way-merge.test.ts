@@ -202,7 +202,7 @@ describe("Three-Way Merge — Conflict detection", () => {
 
     expect(result.success).toBe(true);
     expect(result.conflicts.length).toBeGreaterThan(0);
-    expect(result.conflicts[0].resolved).toBe(true);
+    expect(result.conflicts[0]!.resolved).toBe(true);
 
     // Verify the "theirs" value won
     const mergedDoc = await dbA.collection("tw_resolve").findOne({ _id: testId });

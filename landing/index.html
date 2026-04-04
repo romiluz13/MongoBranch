@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MongoBranch — Git for MongoDB, Built for AI Agents</title>
+  <meta name="description" content="Git-like version control for MongoDB. Branches, commits, diffs, three-way merges, time travel, and 78 MCP tools for AI agents.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    /* === RESET & BASE === */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0a0a0f;
+      --bg-card: #12121a;
+      --bg-card-hover: #1a1a28;
+      --border: #1e1e2e;
+      --border-glow: #2d5a3d;
+      --text: #e4e4ef;
+      --text-dim: #8888a0;
+      --text-bright: #ffffff;
+      --green: #4ade80;
+      --green-dim: #166534;
+      --green-glow: rgba(74, 222, 128, 0.15);
+      --purple: #a78bfa;
+      --purple-dim: #5b21b6;
+      --blue: #60a5fa;
+      --orange: #fb923c;
+      --red: #f87171;
+      --cyan: #22d3ee;
+      --yellow: #fbbf24;
+      --mono: 'JetBrains Mono', monospace;
+      --sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --radius: 12px;
+      --radius-sm: 8px;
+    }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--green); text-decoration: none; transition: color 0.2s; }
+    a:hover { color: var(--text-bright); }
+    ::selection { background: var(--green-dim); color: var(--green); }
+
+    /* === LAYOUT === */
+    .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+    section { padding: 100px 0; position: relative; }
+    .section-label {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--green);
+      margin-bottom: 12px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .section-label::before { content: ''; width: 20px; height: 1px; background: var(--green); }
+    .section-title {
+      font-size: clamp(2rem, 4vw, 3rem);
+      font-weight: 800;
+      color: var(--text-bright);
+      line-height: 1.15;
+      margin-bottom: 16px;
+    }
+    .section-subtitle {
+      font-size: 1.125rem;
+      color: var(--text-dim);
+      max-width: 600px;
+      line-height: 1.7;
+    }
+
+    /* === NAV === */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      background: rgba(10, 10, 15, 0.85);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px; height: 64px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    nav .nav-inner {
+      max-width: 1200px; width: 100%;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .logo { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 1.1rem; color: var(--text-bright); }
+    .logo-icon {
+      width: 32px; height: 32px; border-radius: 8px;
+      background: linear-gradient(135deg, var(--green), var(--green-dim));
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--mono); font-size: 14px; font-weight: 700; color: var(--bg);
+    }
+    .nav-links { display: flex; align-items: center; gap: 32px; }
+    .nav-links a { color: var(--text-dim); font-size: 0.875rem; font-weight: 500; }
+    .nav-links a:hover { color: var(--text-bright); }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 10px 20px; border-radius: var(--radius-sm);
+      font-weight: 600; font-size: 0.875rem;
+      transition: all 0.25s ease; cursor: pointer; border: none;
+    }
+    .btn-primary {
+      background: var(--green); color: var(--bg);
+      box-shadow: 0 0 20px var(--green-glow);
+    }
+    .btn-primary:hover { background: #6ee7a0; color: var(--bg); transform: translateY(-1px); box-shadow: 0 0 30px var(--green-glow); }
+    .btn-ghost {
+      background: transparent; color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover { border-color: var(--green); color: var(--green); }
+
+    /* === HERO === */
+    .hero {
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding-top: 64px; position: relative;
+      background:
+        radial-gradient(ellipse 80% 60% at 50% -10%, rgba(74, 222, 128, 0.08), transparent),
+        radial-gradient(ellipse 60% 50% at 80% 50%, rgba(167, 139, 250, 0.05), transparent);
+    }
+    .hero-content { text-align: center; max-width: 860px; }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 16px; border-radius: 100px;
+      background: var(--bg-card); border: 1px solid var(--border);
+      font-family: var(--mono); font-size: 0.75rem; color: var(--green);
+      margin-bottom: 32px;
+    }
+    .hero-badge .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .hero h1 {
+      font-size: clamp(2.5rem, 6vw, 4.5rem);
+      font-weight: 900; line-height: 1.08;
+      color: var(--text-bright); margin-bottom: 24px;
+      letter-spacing: -0.03em;
+    }
+    .hero h1 .gradient {
+      background: linear-gradient(135deg, var(--green), var(--cyan));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero p {
+      font-size: 1.25rem; color: var(--text-dim);
+      max-width: 620px; margin: 0 auto 40px; line-height: 1.7;
+    }
+    .hero-actions { display: flex; align-items: center; justify-content: center; gap: 16px; flex-wrap: wrap; margin-bottom: 64px; }
+    .hero-install {
+      display: flex; align-items: center; gap: 12px;
+      background: var(--bg-card); border: 1px solid var(--border);
+      padding: 12px 20px; border-radius: var(--radius-sm);
+      font-family: var(--mono); font-size: 0.875rem; color: var(--text-dim);
+    }
+    .hero-install code { color: var(--green); }
+
+    /* === STATS BAR === */
+    .stats-bar {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 1px; background: var(--border); border-radius: var(--radius);
+      overflow: hidden; max-width: 720px; margin: 0 auto;
+    }
+    .stat {
+      background: var(--bg-card); padding: 24px 16px; text-align: center;
+    }
+    .stat-value {
+      font-size: 2rem; font-weight: 800; color: var(--green);
+      font-family: var(--mono);
+    }
+    .stat-label { font-size: 0.75rem; color: var(--text-dim); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
+
+    /* === DIVIDER === */
+    .divider { height: 1px; background: linear-gradient(90deg, transparent, var(--border), transparent); }
+
+    /* === FEATURE CARDS === */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 16px; margin-top: 48px;
+    }
+    .feature-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 28px;
+      transition: all 0.3s ease; position: relative; overflow: hidden;
+    }
+    .feature-card:hover {
+      border-color: var(--border-glow); background: var(--bg-card-hover);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+    .feature-card .icon {
+      width: 40px; height: 40px; border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.25rem; margin-bottom: 16px;
+    }
+    .feature-card h3 { font-size: 1.05rem; font-weight: 700; color: var(--text-bright); margin-bottom: 8px; }
+    .feature-card p { font-size: 0.875rem; color: var(--text-dim); line-height: 1.6; }
+    .feature-card .tag {
+      display: inline-block; margin-top: 12px;
+      font-family: var(--mono); font-size: 0.7rem;
+      padding: 3px 8px; border-radius: 4px;
+      background: var(--green-dim); color: var(--green);
+    }
+    .icon-green { background: rgba(74, 222, 128, 0.12); }
+    .icon-purple { background: rgba(167, 139, 250, 0.12); }
+    .icon-blue { background: rgba(96, 165, 250, 0.12); }
+    .icon-orange { background: rgba(251, 146, 60, 0.12); }
+    .icon-cyan { background: rgba(34, 211, 238, 0.12); }
+    .icon-red { background: rgba(248, 113, 113, 0.12); }
+    .icon-yellow { background: rgba(251, 191, 36, 0.12); }
+
+    /* === COMPARISON TABLE === */
+    .comparison-table {
+      width: 100%; border-collapse: separate; border-spacing: 0;
+      margin-top: 48px; border-radius: var(--radius); overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .comparison-table th, .comparison-table td {
+      padding: 14px 20px; text-align: left; font-size: 0.875rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .comparison-table thead th {
+      background: var(--bg-card); color: var(--text-dim);
+      font-weight: 600; font-size: 0.75rem;
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .comparison-table thead th:first-child { text-align: left; }
+    .comparison-table thead th.highlight { color: var(--green); }
+    .comparison-table tbody td { background: var(--bg); }
+    .comparison-table tbody tr:hover td { background: var(--bg-card); }
+    .comparison-table tbody td:first-child { font-weight: 600; color: var(--text-bright); }
+    .check { color: var(--green); }
+    .cross { color: var(--red); opacity: 0.5; }
+    .partial { color: var(--yellow); }
+
+    /* === CODE BLOCK === */
+    .code-block {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow: hidden; margin-top: 32px;
+    }
+    .code-header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 12px 20px; border-bottom: 1px solid var(--border);
+      font-family: var(--mono); font-size: 0.75rem; color: var(--text-dim);
+    }
+    .code-header .dots { display: flex; gap: 6px; }
+    .code-header .dots span { width: 10px; height: 10px; border-radius: 50%; }
+    .code-header .dots span:nth-child(1) { background: #ff5f57; }
+    .code-header .dots span:nth-child(2) { background: #febc2e; }
+    .code-header .dots span:nth-child(3) { background: #28c840; }
+    .code-body {
+      padding: 20px 24px; font-family: var(--mono); font-size: 0.8rem;
+      line-height: 1.8; overflow-x: auto; color: var(--text-dim);
+    }
+    .code-body .kw { color: var(--purple); }
+    .code-body .fn { color: var(--blue); }
+    .code-body .str { color: var(--green); }
+    .code-body .cm { color: #555570; font-style: italic; }
+    .code-body .num { color: var(--orange); }
+
+    /* === ENGINE PILLS === */
+    .engine-pill {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 12px 16px;
+      font-family: var(--mono); font-size: 0.8rem; color: var(--text);
+      transition: all 0.2s;
+    }
+    .engine-pill:hover { border-color: var(--green); color: var(--green); transform: translateX(4px); }
+
+    /* === TESTING SECTION === */
+    .testing-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 16px; margin-top: 48px;
+    }
+    .testing-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 32px; text-align: center;
+    }
+    .testing-card .big { font-size: 3rem; font-weight: 900; font-family: var(--mono); }
+    .testing-card .label { font-size: 0.875rem; color: var(--text-dim); margin-top: 8px; }
+    .testing-card.green .big { color: var(--green); }
+    .testing-card.purple .big { color: var(--purple); }
+    .testing-card.cyan .big { color: var(--cyan); }
+
+    /* === CTA === */
+    .cta-section {
+      text-align: center; padding: 120px 24px;
+      background:
+        radial-gradient(ellipse 80% 60% at 50% 100%, rgba(74, 222, 128, 0.06), transparent),
+        radial-gradient(ellipse 60% 40% at 20% 80%, rgba(167, 139, 250, 0.04), transparent);
+    }
+    .cta-section h2 {
+      font-size: clamp(2rem, 4vw, 3.5rem); font-weight: 900;
+      color: var(--text-bright); margin-bottom: 16px;
+    }
+    .cta-section p { font-size: 1.125rem; color: var(--text-dim); margin-bottom: 40px; max-width: 500px; margin-left: auto; margin-right: auto; }
+    .cta-actions { display: flex; align-items: center; justify-content: center; gap: 16px; flex-wrap: wrap; }
+
+    /* === FOOTER === */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 40px 24px; text-align: center;
+      font-size: 0.8rem; color: var(--text-dim);
+    }
+    footer a { color: var(--text-dim); }
+    footer a:hover { color: var(--green); }
+
+    /* === RESPONSIVE === */
+    @media (max-width: 768px) {
+      .nav-links a:not(.btn) { display: none; }
+      .features-grid { grid-template-columns: 1fr; }
+      .comparison-table { font-size: 0.75rem; }
+      .comparison-table th, .comparison-table td { padding: 10px 12px; }
+      [style*="grid-template-columns: 1fr 1fr"] { grid-template-columns: 1fr !important; }
+      .testing-grid { grid-template-columns: 1fr; }
+      .stats-bar { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- NAV -->
+  <nav>
+    <div class="nav-inner">
+      <div class="logo">
+        <div class="logo-icon">MB</div>
+        MongoBranch
+      </div>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#engines">Engines</a>
+        <a href="#agents">Agent Safety</a>
+        <a href="#mcp">MCP Tools</a>
+        <a href="https://github.com/romiluz13/MongoBranch" class="btn btn-ghost" target="_blank">⭐ GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="hero-content">
+      <div class="hero-badge"><span class="dot"></span> v1.0.0 — Published on npm</div>
+      <h1>
+        <span class="gradient">Git for MongoDB</span><br>
+        Built for AI Agents
+      </h1>
+      <p>
+        Create branches, make commits, diff changes, three-way merge, time travel,
+        and roll back — all on your MongoDB data. The safety layer every AI agent needs.
+      </p>
+      <div class="hero-actions">
+        <a href="https://github.com/romiluz13/MongoBranch" class="btn btn-primary" target="_blank">Get Started →</a>
+        <div class="hero-install">
+          <span>$</span>
+          <code>npm install -g mongobranch</code>
+        </div>
+      </div>
+      <div class="stats-bar">
+        <div class="stat"><div class="stat-value">22</div><div class="stat-label">Engines</div></div>
+        <div class="stat"><div class="stat-value">78</div><div class="stat-label">MCP Tools</div></div>
+        <div class="stat"><div class="stat-value">308</div><div class="stat-label">Tests</div></div>
+        <div class="stat"><div class="stat-value">0</div><div class="stat-label">Mocks</div></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- FEATURES -->
+  <section id="features">
+    <div class="container">
+      <div class="section-label">Core Capabilities</div>
+      <div class="section-title">Everything Git does.<br>For your MongoDB data.</div>
+      <p class="section-subtitle">22 production-ready engines, each battle-tested with real MongoDB — zero mocks, zero compromises.</p>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="icon icon-green">🌿</div>
+          <h3>Branch Manager</h3>
+          <p>Create isolated database branches per agent, feature, or experiment. Full copy-on-write with lazy materialization.</p>
+          <span class="tag">BranchManager</span>
+        </div>
+        <div class="feature-card">
+          <div class="icon icon-purple">📝</div>
+          <h3>Commit Engine</h3>
+          <p>Content-addressed commits with SHA-256, parent chains, tags, cherry-pick, and revert. Full audit trail.</p>
+          <span class="tag">CommitEngine</span>
+        </div>
+        <div class="feature-card">
+          <div class="icon icon-blue">🔍</div>
+          <h3>Diff Engine</h3>
+          <p>Document-level diffing via jsondiffpatch. Detect added, removed, and modified documents across collections.</p>
+          <span class="tag">DiffEngine</span>
+        </div>
+        <div class="feature-card">
+          <div class="icon icon-cyan">🔀</div>
+          <h3>Three-Way Merge</h3>
+          <p>Real three-way merge with common ancestor detection. Automatic conflict resolution with multiple strategies.</p>
+          <span class="tag">MergeEngine</span>
+        </div>
+        <div class="feature-card">
+          <div class="icon icon-orange">⏳</div>
+          <h3>Time Travel</h3>
+          <p>Query data at any commit or timestamp. <code>findAt()</code>, <code>listCollectionsAt()</code>, and full document blame.</p>
+          <span class="tag">TimeTravelEngine</span>
+        </div>
+        <div class="feature-card">
+          <div class="icon icon-red">🛡️</div>
+          <h3>Branch Protection</h3>
+          <p>Glob-pattern protection rules, deploy requests with approval workflows, and pre/post hooks on 14 event types.</p>
+          <span class="tag">ProtectionManager</span>
+        </div>
+        <div class="feature-card">
+          <div class="icon icon-yellow">🤖</div>
+          <h3>Agent Scoping</h3>
+          <p>Per-agent permission boundaries — collection ACLs, quota limits, and violation tracking. Safe multi-agent access.</p>
+          <span class="tag">ScopeManager</span>
+        </div>
+        <div class="feature-card">
+          <div class="icon icon-green">📦</div>
+          <h3>Stash & Reflog</h3>
+          <p>Stash uncommitted work and pop it later. Reflog tracks every branch pointer change — survives deletion.</p>
+          <span class="tag">StashManager + ReflogManager</span>
+        </div>
+        <div class="feature-card">
+          <div class="icon icon-purple">🔐</div>
+          <h3>PII Anonymization</h3>
+          <p>Hash, mask, null, or redact sensitive fields when branching. Create safe sandbox copies for agent experimentation.</p>
+          <span class="tag">AnonymizeEngine</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- COMPARISON -->
+  <section>
+    <div class="container">
+      <div class="section-label">Why MongoBranch</div>
+      <div class="section-title">How we compare</div>
+      <p class="section-subtitle">Purpose-built for MongoDB and AI agents. Not a general-purpose tool adapted after the fact.</p>
+
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th>Capability</th>
+            <th class="highlight">MongoBranch</th>
+            <th>Neon Branching</th>
+            <th>Dolt</th>
+            <th>Argon Time Machine</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Database</td><td><span class="check">MongoDB ✓</span></td><td>Postgres only</td><td>MySQL-compat</td><td>MongoDB</td></tr>
+          <tr><td>Branch isolation</td><td><span class="check">Full DB copy ✓</span></td><td><span class="check">CoW ✓</span></td><td><span class="check">✓</span></td><td><span class="partial">Snapshot ~</span></td></tr>
+          <tr><td>Three-way merge</td><td><span class="check">✓</span></td><td><span class="cross">✗</span></td><td><span class="check">✓</span></td><td><span class="cross">✗</span></td></tr>
+          <tr><td>Content-addressed commits</td><td><span class="check">SHA-256 ✓</span></td><td><span class="cross">✗</span></td><td><span class="check">✓</span></td><td><span class="cross">✗</span></td></tr>
+          <tr><td>Time travel queries</td><td><span class="check">✓</span></td><td><span class="check">✓</span></td><td><span class="check">✓</span></td><td><span class="check">✓</span></td></tr>
+          <tr><td>Agent scoping &amp; ACLs</td><td><span class="check">✓</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td></tr>
+          <tr><td>MCP tool integration</td><td><span class="check">78 tools ✓</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td></tr>
+          <tr><td>PII anonymization</td><td><span class="check">4 strategies ✓</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td></tr>
+          <tr><td>Deploy requests</td><td><span class="check">Approval flow ✓</span></td><td><span class="cross">✗</span></td><td><span class="partial">PR-style ~</span></td><td><span class="cross">✗</span></td></tr>
+          <tr><td>Hooks &amp; events</td><td><span class="check">14 events ✓</span></td><td><span class="cross">✗</span></td><td><span class="partial">Triggers ~</span></td><td><span class="cross">✗</span></td></tr>
+          <tr><td>Search index branching</td><td><span class="check">Atlas Search ✓</span></td><td>N/A</td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- AGENT SAFETY -->
+  <section id="agents">
+    <div class="container">
+      <div class="section-label">Agent-First Design</div>
+      <div class="section-title">Safe AI experimentation.<br>Zero production risk.</div>
+      <p class="section-subtitle">Every AI agent gets its own isolated branch. Experiment freely, merge only what works, roll back what doesn't.</p>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 48px;">
+        <div>
+          <div class="code-block">
+            <div class="code-header">
+              <div class="dots"><span></span><span></span><span></span></div>
+              <span>agent-workflow.ts</span>
+            </div>
+            <div class="code-body">
+<span class="cm">// 1. Agent registers & gets isolated branch</span>
+<span class="kw">const</span> agent = <span class="kw">await</span> agentMgr.<span class="fn">register</span>(<span class="str">"pricing-bot"</span>);
+
+<span class="cm">// 2. Work freely — all writes isolated</span>
+<span class="kw">await</span> proxy.<span class="fn">insertOne</span>(<span class="str">"products"</span>, {
+  name: <span class="str">"Enterprise Plan"</span>,
+  price: <span class="num">299</span>
+});
+
+<span class="cm">// 3. Commit with SHA-256 hash</span>
+<span class="kw">const</span> commit = <span class="kw">await</span> commitEngine.<span class="fn">commit</span>(
+  branch, <span class="str">"Add enterprise pricing"</span>
+);
+
+<span class="cm">// 4. Three-way merge to main</span>
+<span class="kw">await</span> mergeEngine.<span class="fn">threeWayMerge</span>(
+  branch, <span class="str">"main"</span>,
+  { strategy: <span class="str">"theirs-wins"</span> }
+);
+
+<span class="cm">// 5. Or time-travel to check history</span>
+<span class="kw">const</span> old = <span class="kw">await</span> timeTravel.<span class="fn">findAt</span>(
+  <span class="str">"products"</span>, commit.sha, {}
+);
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 16px;">
+          <div class="feature-card">
+            <div class="icon icon-green">🔒</div>
+            <h3>Execution Guard</h3>
+            <p>Branch protection rules prevent direct writes to main. Agents must go through deploy requests with approval workflows.</p>
+          </div>
+          <div class="feature-card">
+            <div class="icon icon-purple">📊</div>
+            <h3>Operation Log</h3>
+            <p>Every insert, update, and delete is recorded in the oplog. Full undo capability and audit trail per branch.</p>
+          </div>
+          <div class="feature-card">
+            <div class="icon icon-cyan">🔄</div>
+            <h3>Merge Queue</h3>
+            <p>Ordered FIFO merge queue for concurrent agents. No race conditions, no data corruption, deterministic ordering.</p>
+          </div>
+          <div class="feature-card">
+            <div class="icon icon-orange">🎯</div>
+            <h3>N-Way Compare</h3>
+            <p>Compare any number of branches simultaneously. Full presence matrix showing which documents exist where.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- ENGINES -->
+  <section id="engines">
+    <div class="container">
+      <div class="section-label">Architecture</div>
+      <div class="section-title">22 engines, one command.</div>
+      <p class="section-subtitle">Each engine is independently testable, composable, and production-ready.</p>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin-top: 48px;">
+        <div class="engine-pill">🌿 BranchManager</div>
+        <div class="engine-pill">📝 CommitEngine</div>
+        <div class="engine-pill">🔍 DiffEngine</div>
+        <div class="engine-pill">🔀 MergeEngine</div>
+        <div class="engine-pill">🤖 AgentManager</div>
+        <div class="engine-pill">📜 HistoryManager</div>
+        <div class="engine-pill">📋 MergeQueue</div>
+        <div class="engine-pill">📊 OperationLog</div>
+        <div class="engine-pill">🔌 BranchProxy</div>
+        <div class="engine-pill">🛡️ ProtectionManager</div>
+        <div class="engine-pill">🪝 HookManager</div>
+        <div class="engine-pill">⏳ TimeTravelEngine</div>
+        <div class="engine-pill">🚀 DeployRequestManager</div>
+        <div class="engine-pill">🎯 ScopeManager</div>
+        <div class="engine-pill">📊 BranchComparator</div>
+        <div class="engine-pill">📦 StashManager</div>
+        <div class="engine-pill">🔐 AnonymizeEngine</div>
+        <div class="engine-pill">📓 ReflogManager</div>
+        <div class="engine-pill">🔎 SearchIndexManager</div>
+        <div class="engine-pill">💻 CLI (Commander.js)</div>
+        <div class="engine-pill">🌐 MCP Server (stdio)</div>
+        <div class="engine-pill">📄 Agent Skill File</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- MCP TOOLS -->
+  <section id="mcp">
+    <div class="container">
+      <div class="section-label">MCP Integration</div>
+      <div class="section-title">78 tools. One MCP server.</div>
+      <p class="section-subtitle">Every engine is exposed as MCP tools — plug into Claude, Cursor, Windsurf, or any MCP-compatible agent.</p>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 48px;">
+        <div class="code-block">
+          <div class="code-header">
+            <div class="dots"><span></span><span></span><span></span></div>
+            <span>MCP Tool Categories</span>
+          </div>
+          <div class="code-body">
+<span class="fn">create_branch</span>            <span class="cm">// Create isolated branch</span>
+<span class="fn">list_branches</span>            <span class="cm">// List all branches</span>
+<span class="fn">commit</span>                   <span class="cm">// SHA-256 content-addressed commit</span>
+<span class="fn">commit_log</span>               <span class="cm">// Commit history with parent chains</span>
+<span class="fn">diff_branch</span>              <span class="cm">// Field-level document diff</span>
+<span class="fn">merge_three_way</span>          <span class="cm">// Three-way merge with conflicts</span>
+<span class="fn">time_travel_query</span>        <span class="cm">// Query at any commit or timestamp</span>
+<span class="fn">register_agent</span>           <span class="cm">// Register AI agent sandbox</span>
+<span class="fn">check_agent_permission</span>   <span class="cm">// Verify agent scope</span>
+<span class="fn">open_deploy_request</span>      <span class="cm">// PR-like deploy workflow</span>
+<span class="fn">stash</span>                    <span class="cm">// Stash uncommitted changes</span>
+<span class="fn">create_anonymized_branch</span> <span class="cm">// PII anonymization</span>
+<span class="cm">... and 61 more tools</span>
+          </div>
+        </div>
+
+        <div class="code-block">
+          <div class="code-header">
+            <div class="dots"><span></span><span></span><span></span></div>
+            <span>CLI Commands</span>
+          </div>
+          <div class="code-body">
+<span class="str">$</span> mb branch create feature/pricing
+<span class="cm">✓ Branch "feature/pricing" created</span>
+
+<span class="str">$</span> mb commit feature/pricing -m <span class="str">"Update pricing model"</span>
+<span class="cm">✓ Commit a7f3c2d (SHA-256)</span>
+
+<span class="str">$</span> mb diff feature/pricing
+<span class="cm">  products: +2 modified, +1 added</span>
+
+<span class="str">$</span> mb merge feature/pricing
+<span class="cm">✓ Merged 3 changes (0 conflicts)</span>
+
+<span class="str">$</span> mb query feature/pricing products --commit a7f3c2d
+<span class="cm">  [3 documents at commit a7f3c2d]</span>
+
+<span class="str">$</span> mb blame feature/pricing products --docId abc123
+<span class="cm">  name: commit a7f3c2d by "rom" — "Update pricing"</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- TESTING -->
+  <section>
+    <div class="container">
+      <div class="section-label">Battle Tested</div>
+      <div class="section-title">308 tests. Zero mocks. Real MongoDB.</div>
+      <p class="section-subtitle">Every test runs against a real Atlas Local Docker instance. No fakes, no shortcuts, no surprises in production.</p>
+
+      <div class="testing-grid">
+        <div class="testing-card green">
+          <div class="big">308</div>
+          <div class="label">Tests passing</div>
+        </div>
+        <div class="testing-card purple">
+          <div class="big">28</div>
+          <div class="label">Test suites</div>
+        </div>
+        <div class="testing-card cyan">
+          <div class="big">0</div>
+          <div class="label">Mocked calls</div>
+        </div>
+      </div>
+
+      <div class="code-block" style="margin-top: 32px;">
+        <div class="code-header">
+          <div class="dots"><span></span><span></span><span></span></div>
+          <span>bun test — all green</span>
+        </div>
+        <div class="code-body">
+<span class="str">$</span> bun test
+<span class="cm"> ✓ branch.test.ts          — 12 tests</span>
+<span class="cm"> ✓ branch-operations.test  — 8 tests</span>
+<span class="cm"> ✓ commit.test.ts          — 18 tests</span>
+<span class="cm"> ✓ diff.test.ts            — 9 tests</span>
+<span class="cm"> ✓ merge.test.ts           — 11 tests</span>
+<span class="cm"> ✓ three-way-merge.test    — 14 tests</span>
+<span class="cm"> ✓ timetravel.test.ts      — 12 tests</span>
+<span class="cm"> ✓ agent.test.ts           — 10 tests</span>
+<span class="cm"> ✓ scope.test.ts           — 11 tests</span>
+<span class="cm"> ✓ deploy.test.ts          — 9 tests</span>
+<span class="cm"> ✓ stress.test.ts          — 15 tests</span>
+<span class="cm"> ✓ ... and 13 more suites</span>
+
+<span class="check" style="color: var(--green);">308 pass</span> | <span class="cross" style="color: var(--red);">0 fail</span> | <span style="color: var(--text-dim);">0 skip</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="cta-section">
+    <h2>Give your MongoDB<br>a <span style="background: linear-gradient(135deg, var(--green), var(--cyan)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">branching superpower</span>.</h2>
+    <p>Start in 30 seconds. One install, one Docker command, infinite branches.</p>
+    <div class="cta-actions">
+      <a href="https://github.com/romiluz13/MongoBranch" class="btn btn-primary" target="_blank" style="padding: 14px 32px; font-size: 1rem;">⭐ Star on GitHub</a>
+      <a href="https://github.com/romiluz13/MongoBranch#readme" class="btn btn-ghost" target="_blank" style="padding: 14px 32px; font-size: 1rem;">Read the Docs →</a>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer>
+    <div class="container">
+      <div style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 16px;">
+        <div class="logo-icon" style="width: 24px; height: 24px; font-size: 10px;">MB</div>
+        <span style="font-weight: 700; color: var(--text);">MongoBranch</span>
+      </div>
+      <p>Built with 🌿 by <a href="https://github.com/romiluz13" target="_blank">romiluz13</a> · TypeScript · Bun · Real MongoDB</p>
+      <p style="margin-top: 8px;">MIT License · 2026</p>
+    </div>
+  </footer>
+
+</body>
+</html>

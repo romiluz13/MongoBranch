@@ -97,7 +97,7 @@ describe("OperationLog.getBranchOps", () => {
 
     const ops = await oplog.getBranchOps("b3", { collection: "products" });
     expect(ops).toHaveLength(1);
-    expect(ops[0].collection).toBe("products");
+    expect(ops[0]!.collection).toBe("products");
   });
 });
 

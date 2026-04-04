@@ -9,7 +9,7 @@
  *   bun src/mcp/server.ts
  *
  * Configure via environment variables:
- *   MONGOBRANCH_URI — MongoDB connection string (default: mongodb://localhost:27018)
+ *   MONGOBRANCH_URI — MongoDB connection string (default: mongodb://localhost:27017)
  *   MONGOBRANCH_DB  — Source database name (default: myapp)
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -17,7 +17,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { MongoClient } from "mongodb";
 import { z } from "zod";
 import { createMongoBranchTools } from "./tools.ts";
-import { DEFAULT_CONFIG } from "../core/types.ts";
+import { DEFAULT_CONFIG, CLIENT_OPTIONS } from "../core/types.ts";
 import type { MongoBranchConfig } from "../core/types.ts";
 
 const config: MongoBranchConfig = {
@@ -33,7 +33,7 @@ const mcpServer = new McpServer({
 });
 
 async function main(): Promise<void> {
-  const client = new MongoClient(config.uri);
+  const client = new MongoClient(config.uri, CLIENT_OPTIONS);
   await client.connect();
 
   const tools = createMongoBranchTools(client, config);
@@ -49,8 +49,17 @@ async function main(): Promise<void> {
       from: z.string().optional().describe("Parent branch (default: main)"),
       createdBy: z.string().optional().describe("Agent or user identity"),
       readOnly: z.boolean().optional().describe("Create as read-only (for review)"),
+      lazy: z.boolean().optional().describe("Lazy copy-on-write (instant create, materialize on first write)"),
+      collections: z.array(z.string()).optional().describe("Only copy these collections (partial branch)"),
+      schemaOnly: z.boolean().optional().describe("Copy indexes and validators only, no data"),
     },
   }, async (args) => tools.create_branch(args));
+
+  // ── Tool: system_status ────────────────────────────────────
+  mcpServer.registerTool("system_status", {
+    description: "System overview: active branches, storage usage, recent activity. Use to understand current state.",
+    inputSchema: {},
+  }, async () => tools.system_status());
 
   // ── Tool: list_branches ─────────────────────────────────────
   mcpServer.registerTool("list_branches", {
@@ -248,7 +257,7 @@ async function main(): Promise<void> {
     inputSchema: {
       branchName: z.string().describe("Target branch"),
       collection: z.string().describe("Collection name"),
-      document: z.record(z.unknown()).describe("Document to insert"),
+      document: z.record(z.string(), z.unknown()).describe("Document to insert"),
       performedBy: z.string().optional().describe("Who performed this"),
     },
   }, async (args) => tools.branch_insert(args));
@@ -259,8 +268,8 @@ async function main(): Promise<void> {
     inputSchema: {
       branchName: z.string().describe("Target branch"),
       collection: z.string().describe("Collection name"),
-      filter: z.record(z.unknown()).describe("Query filter"),
-      update: z.record(z.unknown()).describe("Update expression (e.g. {$set: {...}})"),
+      filter: z.record(z.string(), z.unknown()).describe("Query filter"),
+      update: z.record(z.string(), z.unknown()).describe("Update expression (e.g. {$set: {...}})"),
       performedBy: z.string().optional().describe("Who performed this"),
     },
   }, async (args) => tools.branch_update(args));
@@ -271,7 +280,7 @@ async function main(): Promise<void> {
     inputSchema: {
       branchName: z.string().describe("Target branch"),
       collection: z.string().describe("Collection name"),
-      filter: z.record(z.unknown()).describe("Query filter"),
+      filter: z.record(z.string(), z.unknown()).describe("Query filter"),
       performedBy: z.string().optional().describe("Who performed this"),
     },
   }, async (args) => tools.branch_delete(args));
@@ -283,10 +292,70 @@ async function main(): Promise<void> {
     inputSchema: {
       branchName: z.string().describe("Target branch"),
       collection: z.string().describe("Collection name"),
-      filter: z.record(z.unknown()).optional().describe("Query filter"),
+      filter: z.record(z.string(), z.unknown()).optional().describe("Query filter"),
       limit: z.number().optional().describe("Max documents to return"),
     },
   }, async (args) => tools.branch_find(args));
+
+  // ── Tool: branch_aggregate ─────────────────────────────────
+  mcpServer.registerTool("branch_aggregate", {
+    description:
+      "Run a MongoDB aggregation pipeline on a branch collection. " +
+      "For lazy branches, reads from source for unmaterialized collections.",
+    inputSchema: {
+      branchName: z.string().describe("Target branch"),
+      collection: z.string().describe("Collection name"),
+      pipeline: z.array(z.record(z.string(), z.unknown())).describe("Aggregation pipeline stages"),
+    },
+  }, async (args) => tools.branch_aggregate(args));
+
+  // ── Tool: branch_count ─────────────────────────────────────
+  mcpServer.registerTool("branch_count", {
+    description:
+      "Count documents matching a filter on a branch collection. " +
+      "Uses countDocuments (accurate count via aggregation).",
+    inputSchema: {
+      branchName: z.string().describe("Target branch"),
+      collection: z.string().describe("Collection name"),
+      filter: z.record(z.string(), z.unknown()).optional().describe("Query filter (default: {})"),
+    },
+  }, async (args) => tools.branch_count(args));
+
+  // ── Tool: branch_list_collections ──────────────────────────
+  mcpServer.registerTool("branch_list_collections", {
+    description:
+      "List all collections in a branch database. " +
+      "For lazy branches, merges parent + materialized collections.",
+    inputSchema: {
+      branchName: z.string().describe("Target branch"),
+    },
+  }, async (args) => tools.branch_list_collections(args));
+
+  // ── Tool: branch_update_many ───────────────────────────────
+  mcpServer.registerTool("branch_update_many", {
+    description:
+      "Update multiple documents on a branch collection. " +
+      "Auto-materializes lazy branches. Records batch operation in oplog.",
+    inputSchema: {
+      branchName: z.string().describe("Target branch"),
+      collection: z.string().describe("Collection name"),
+      filter: z.record(z.string(), z.unknown()).describe("Query filter selecting documents to update"),
+      update: z.record(z.string(), z.unknown()).describe("Update expression (e.g. {$set: {...}})"),
+      performedBy: z.string().optional().describe("Who performed this"),
+    },
+  }, async (args) => tools.branch_update_many(args));
+
+  // ── Tool: branch_schema ────────────────────────────────────
+  mcpServer.registerTool("branch_schema", {
+    description:
+      "Infer the schema of a branch collection by sampling documents. " +
+      "Returns field names, types, and frequency.",
+    inputSchema: {
+      branchName: z.string().describe("Target branch"),
+      collection: z.string().describe("Collection name"),
+      sampleSize: z.number().optional().describe("Number of documents to sample (default: 100)"),
+    },
+  }, async (args) => tools.branch_schema(args));
 
   // ── Tool: branch_oplog ─────────────────────────────────────
   mcpServer.registerTool("branch_oplog", {
@@ -453,7 +522,7 @@ async function main(): Promise<void> {
       collection: z.string().describe("Collection name"),
       commitHash: z.string().optional().describe("Specific commit hash"),
       timestamp: z.string().optional().describe("ISO timestamp (RFC 3339)"),
-      filter: z.record(z.unknown()).optional().describe("MongoDB query filter"),
+      filter: z.record(z.string(), z.unknown()).optional().describe("MongoDB query filter"),
     },
   }, async (args) => tools.time_travel_query(args));
 
@@ -624,6 +693,100 @@ async function main(): Promise<void> {
       removeOrphans: z.boolean().optional().describe("Remove indexes only in target"),
     },
   }, async (args) => tools.merge_search_indexes(args));
+
+  // ── Tool: Audit Chain (Wave 9) ──────────────────────────────
+  mcpServer.registerTool("verify_audit_chain", {
+    description: "Verify the tamper-evident audit chain. Walks every entry and validates SHA-256 hash links. Returns VALID or BROKEN with exact position.",
+    inputSchema: {},
+  }, async () => tools.verify_audit_chain());
+
+  mcpServer.registerTool("export_audit_chain_certified", {
+    description: "Export the full audit chain with cryptographic verification header. For compliance auditors.",
+    inputSchema: {
+      format: z.string().optional().describe("Export format: json (default) or csv"),
+    },
+  }, async (args) => tools.export_audit_chain_certified(args));
+
+  mcpServer.registerTool("get_audit_chain", {
+    description: "Retrieve audit chain entries filtered by branch, time range, or paginated.",
+    inputSchema: {
+      branchName: z.string().optional().describe("Filter by branch name"),
+      limit: z.number().optional().describe("Max entries to return (default 50)"),
+      from: z.string().optional().describe("Start datetime (ISO 8601) for time range filter"),
+      to: z.string().optional().describe("End datetime (ISO 8601) for time range filter"),
+    },
+  }, async (args) => tools.get_audit_chain(args));
+
+  // ── Tool: Webhooks (Wave 9) ──────────────────────────────────
+  mcpServer.registerTool("register_webhook", {
+    description: "Register a webhook to receive HTTP POST notifications on branch events. Pre-hooks block operations, post-hooks are fire-and-forget.",
+    inputSchema: {
+      name: z.string().describe("Unique webhook name"),
+      event: z.string().describe("Event type (pre-merge, post-commit, pre-branch-create, etc.)"),
+      url: z.string().describe("Webhook URL to POST to"),
+      secret: z.string().optional().describe("HMAC-SHA256 signing secret for X-MongoBranch-Signature header"),
+      timeout: z.number().optional().describe("Timeout in ms (default 5000)"),
+    },
+  }, async (args) => tools.register_webhook(args));
+
+  // ── Tool: Branch Watcher (Wave 9) ────────────────────────────
+  mcpServer.registerTool("watch_branch", {
+    description: "Start watching a branch for real-time data changes. Use get_watch_events to retrieve buffered events.",
+    inputSchema: {
+      branchName: z.string().describe("Branch to watch"),
+    },
+  }, async (args) => tools.watch_branch(args));
+
+  mcpServer.registerTool("stop_watch", {
+    description: "Stop watching a branch for changes.",
+    inputSchema: {
+      branchName: z.string().describe("Branch to stop watching"),
+    },
+  }, async (args) => tools.stop_watch(args));
+
+  mcpServer.registerTool("get_watch_events", {
+    description: "Retrieve buffered change events from a watched branch.",
+    inputSchema: {
+      branchName: z.string().describe("Branch to get events for"),
+      since: z.string().optional().describe("Only events after this ISO datetime"),
+    },
+  }, async (args) => tools.get_watch_events(args));
+
+  // ── Tool: Execution Guard (Wave 9) ───────────────────────────
+  mcpServer.registerTool("guarded_execute", {
+    description: "Execute any write tool with idempotency guarantee. If the same requestId was already executed, returns the cached result instead of re-executing. Prevents duplicate side effects from LLM tool call retries.",
+    inputSchema: {
+      requestId: z.string().describe("Unique request ID for deduplication"),
+      tool: z.string().describe("Tool name to execute (e.g., create_branch, merge_branch)"),
+      toolArgs: z.record(z.string(), z.unknown()).describe("Arguments to pass to the tool"),
+    },
+  }, async (args) => tools.guarded_execute(args));
+
+  // ── Tool: Checkpoints (Wave 9) ───────────────────────────────
+  mcpServer.registerTool("create_checkpoint", {
+    description: "Create a lightweight save point on a branch. Agents can restore to this state later if risky operations fail.",
+    inputSchema: {
+      branchName: z.string().describe("Branch to checkpoint"),
+      label: z.string().optional().describe("Optional label (e.g., 'before-migration')"),
+      ttlMinutes: z.number().optional().describe("Auto-expire after N minutes"),
+      createdBy: z.string().optional().describe("Who created the checkpoint"),
+    },
+  }, async (args) => tools.create_checkpoint(args));
+
+  mcpServer.registerTool("restore_checkpoint", {
+    description: "Restore a branch to a previous checkpoint state. Rolls back all changes since that checkpoint.",
+    inputSchema: {
+      branchName: z.string().describe("Branch to restore"),
+      checkpointId: z.string().describe("Checkpoint ID to restore to"),
+    },
+  }, async (args) => tools.restore_checkpoint(args));
+
+  mcpServer.registerTool("list_checkpoints", {
+    description: "List all checkpoints on a branch, newest first.",
+    inputSchema: {
+      branchName: z.string().describe("Branch name"),
+    },
+  }, async (args) => tools.list_checkpoints(args));
 
   // ── Start stdio transport ───────────────────────────────────
   const transport = new StdioServerTransport();

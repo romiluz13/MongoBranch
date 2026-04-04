@@ -11,6 +11,7 @@ import { diff as jdpDiff } from "jsondiffpatch";
 import {
   type DiffResult,
   type CollectionDiff,
+  type DocumentChange,
   type ModifiedDocument,
   type IndexDiff,
   type IndexInfo,
@@ -142,14 +143,14 @@ export class DiffEngine {
     // Documents in source but not target → added
     for (const [id, doc] of sourceMap) {
       if (!targetMap.has(id)) {
-        added.push(doc);
+        added.push(doc as DocumentChange);
       }
     }
 
     // Documents in target but not source → removed
     for (const [id, doc] of targetMap) {
       if (!sourceMap.has(id)) {
-        removed.push(doc);
+        removed.push(doc as DocumentChange);
       }
     }
 
@@ -162,7 +163,7 @@ export class DiffEngine {
       if (delta) {
         modified.push({
           _id: sourceDoc._id,
-          fields: this.extractFieldChanges(delta, targetDoc, sourceDoc),
+          fields: this.extractFieldChanges(delta as Record<string, unknown>, targetDoc, sourceDoc),
         });
       }
     }
@@ -255,7 +256,8 @@ export class DiffEngine {
       try {
         const colls = await db.listCollections({ name }).toArray();
         if (colls.length === 0) return null;
-        const info = colls[0];
+        const info = colls[0] as any;
+        if (!info) return null;
         const hasValidation = info.options?.validator ||
           info.options?.validationLevel ||
           info.options?.validationAction;

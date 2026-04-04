@@ -4,7 +4,7 @@
  * Applies changes from a source branch into a target branch (usually main).
  * Supports dry-run, conflict detection, and resolution strategies.
  */
-import type { MongoClient, Db } from "mongodb";
+import type { MongoClient, Db, AnyBulkWriteOperation } from "mongodb";
 import { DiffEngine } from "./diff.ts";
 import { CommitEngine } from "./commit.ts";
 import {
@@ -90,58 +90,72 @@ export class MergeEngine {
       }
     }
 
-    // Apply changes per collection
-    for (const [collName, collDiff] of Object.entries(diff.collections)) {
-      const targetColl = targetDb.collection(collName);
+    // Apply changes atomically inside a transaction
+    const session = this.client.startSession();
+    try {
+      await session.withTransaction(async () => {
+        // Apply changes per collection using bulkWrite
+        for (const [collName, collDiff] of Object.entries(diff.collections)) {
+          const targetColl = targetDb.collection(collName);
+          const ops: AnyBulkWriteOperation[] = [];
 
-      // Inserts — always safe (new docs)
-      if (collDiff.added.length > 0) {
-        await targetColl.insertMany(collDiff.added.map((doc) => ({ ...doc })));
-      }
-
-      // Deletes — always apply
-      for (const doc of collDiff.removed) {
-        await targetColl.deleteOne({ _id: doc._id });
-      }
-
-      // Modifications — apply based on conflict strategy
-      for (const mod of collDiff.modified) {
-        const isConflict = conflicts.some(
-          (c) => c.collection === collName && c.documentId === mod._id
-        );
-
-        if (isConflict && detectConflicts) {
-          if (strategy === "ours") {
-            // Keep target version — skip this modification
-            continue;
-          } else if (strategy === "theirs") {
-            // Use source version — apply the modification
-            const sourceDoc = await sourceDb.collection(collName).findOne({ _id: mod._id });
-            if (sourceDoc) {
-              await targetColl.replaceOne({ _id: mod._id }, sourceDoc);
-            }
-          } else {
-            // "abort" — skip the modification (but don't fail the whole merge)
-            continue;
+          // Inserts — always safe (new docs)
+          for (const doc of collDiff.added) {
+            ops.push({ insertOne: { document: { ...doc } as any } });
           }
-        } else {
-          // No conflict — apply source version
-          const sourceDoc = await sourceDb.collection(collName).findOne({ _id: mod._id });
-          if (sourceDoc) {
-            await targetColl.replaceOne({ _id: mod._id }, sourceDoc);
+
+          // Deletes — always apply
+          for (const doc of collDiff.removed) {
+            ops.push({ deleteOne: { filter: { _id: doc._id as any } } });
+          }
+
+          // Modifications — apply based on conflict strategy
+          for (const mod of collDiff.modified) {
+            const isConflict = conflicts.some(
+              (c) => c.collection === collName && c.documentId === mod._id
+            );
+
+            if (isConflict && detectConflicts) {
+              if (strategy === "ours") {
+                continue; // Keep target version
+              } else if (strategy === "theirs") {
+                const sourceDoc = await sourceDb
+                  .collection(collName)
+                  .findOne({ _id: mod._id as any }, { session });
+                if (sourceDoc) {
+                  ops.push({ replaceOne: { filter: { _id: mod._id as any }, replacement: sourceDoc } });
+                }
+              } else {
+                continue; // "abort" — skip
+              }
+            } else {
+              const sourceDoc = await sourceDb
+                .collection(collName)
+                .findOne({ _id: mod._id as any }, { session });
+              if (sourceDoc) {
+                ops.push({ replaceOne: { filter: { _id: mod._id as any }, replacement: sourceDoc } });
+              }
+            }
+          }
+
+          if (ops.length > 0) {
+            await targetColl.bulkWrite(ops, { ordered: true, session });
           }
         }
-      }
-    }
 
-    // Mark branch as merged
-    await this.client
-      .db(this.config.metaDatabase)
-      .collection(META_COLLECTION)
-      .updateOne(
-        { name: sourceBranch },
-        { $set: { status: "merged", updatedAt: new Date() } }
-      );
+        // Mark branch as merged
+        await this.client
+          .db(this.config.metaDatabase)
+          .collection(META_COLLECTION)
+          .updateOne(
+            { name: sourceBranch },
+            { $set: { status: "merged" }, $currentDate: { updatedAt: true } },
+            { session }
+          );
+      });
+    } finally {
+      await session.endSession();
+    }
 
     return {
       sourceBranch, targetBranch, collectionsAffected,
@@ -189,7 +203,7 @@ export class MergeEngine {
     if (!ancestor) {
       const twoWayResult = await this.merge(sourceBranch, targetBranch, {
         dryRun,
-        strategy: conflictStrategy === "ours" ? "ours" : conflictStrategy === "theirs" ? "theirs" : "ours",
+        conflictStrategy: conflictStrategy === "ours" ? "ours" : conflictStrategy === "theirs" ? "theirs" : "ours",
       });
       return {
         sourceBranch,
@@ -255,51 +269,78 @@ export class MergeEngine {
       };
     }
 
-    // Step 6: Apply changes to target
-    for (const add of diff3.additions) {
-      await targetDb.collection(add.collection).insertOne(add.doc as any);
-    }
-    for (const del of diff3.deletions) {
-      await targetDb.collection(del.collection).deleteOne({ _id: del.docId as any });
-    }
-    for (const mod of diff3.modifications) {
-      await targetDb.collection(mod.collection).updateOne(
-        { _id: mod.docId as any },
-        { $set: mod.mergedFields }
-      );
-    }
-    // Apply resolved conflicts
-    for (const conflict of diff3.conflicts.filter(c => c.resolved)) {
-      if (conflict.field === "_deleted") {
-        if (conflict.resolvedValue === null) {
-          await targetDb.collection(conflict.collection).deleteOne({ _id: conflict.documentId as any });
-        }
-      } else {
-        await targetDb.collection(conflict.collection).updateOne(
-          { _id: conflict.documentId as any },
-          { $set: { [conflict.field]: conflict.resolvedValue } }
-        );
-      }
-    }
-
-    // Create merge commit with two parents
-    const commitMessage = message ?? `Merge "${sourceBranch}" into "${targetBranch}"`;
-    const targetHead = (await this.client.db(this.config.metaDatabase)
-      .collection<BranchMetadata>(META_COLLECTION)
-      .findOne({ name: targetBranch, status: { $ne: "deleted" } }))?.headCommit;
-    const sourceHead = (await this.client.db(this.config.metaDatabase)
-      .collection<BranchMetadata>(META_COLLECTION)
-      .findOne({ name: sourceBranch, status: { $ne: "deleted" } }))?.headCommit;
-
+    // Step 6: Apply changes to target atomically
+    const session = this.client.startSession();
     let mergeCommitHash: string | undefined;
-    if (targetHead && sourceHead) {
-      const mergeCommit = await commitEngine.commit({
-        branchName: targetBranch,
-        message: commitMessage,
-        author,
-        parentOverrides: [targetHead, sourceHead],
+    try {
+      await session.withTransaction(async () => {
+        // Group operations by collection for bulkWrite
+        const collOps = new Map<string, AnyBulkWriteOperation[]>();
+        const getOps = (coll: string) => {
+          if (!collOps.has(coll)) collOps.set(coll, []);
+          return collOps.get(coll)!;
+        };
+
+        for (const add of diff3.additions) {
+          getOps(add.collection).push({ insertOne: { document: add.doc as any } });
+        }
+        for (const del of diff3.deletions) {
+          getOps(del.collection).push({ deleteOne: { filter: { _id: del.docId as any } } });
+        }
+        for (const mod of diff3.modifications) {
+          getOps(mod.collection).push({
+            updateOne: {
+              filter: { _id: mod.docId as any },
+              update: { $set: mod.mergedFields },
+            },
+          });
+        }
+        // Apply resolved conflicts
+        for (const conflict of diff3.conflicts.filter(c => c.resolved)) {
+          if (conflict.field === "_deleted") {
+            if (conflict.resolvedValue === null) {
+              getOps(conflict.collection).push({
+                deleteOne: { filter: { _id: conflict.documentId as any } },
+              });
+            }
+          } else {
+            getOps(conflict.collection).push({
+              updateOne: {
+                filter: { _id: conflict.documentId as any },
+                update: { $set: { [conflict.field]: conflict.resolvedValue } },
+              },
+            });
+          }
+        }
+
+        // Execute all bulkWrite ops
+        for (const [collName, ops] of collOps) {
+          if (ops.length > 0) {
+            await targetDb.collection(collName).bulkWrite(ops, { ordered: true, session });
+          }
+        }
+
+        // Create merge commit with two parents
+        const commitMessage = message ?? `Merge "${sourceBranch}" into "${targetBranch}"`;
+        const targetHead = (await this.client.db(this.config.metaDatabase)
+          .collection<BranchMetadata>(META_COLLECTION)
+          .findOne({ name: targetBranch, status: { $ne: "deleted" } }, { session }))?.headCommit;
+        const sourceHead = (await this.client.db(this.config.metaDatabase)
+          .collection<BranchMetadata>(META_COLLECTION)
+          .findOne({ name: sourceBranch, status: { $ne: "deleted" } }, { session }))?.headCommit;
+
+        if (targetHead && sourceHead) {
+          const mergeCommit = await commitEngine.commit({
+            branchName: targetBranch,
+            message: commitMessage,
+            author,
+            parentOverrides: [targetHead, sourceHead],
+          });
+          mergeCommitHash = mergeCommit.hash;
+        }
       });
-      mergeCommitHash = mergeCommit.hash;
+    } finally {
+      await session.endSession();
     }
 
     return {

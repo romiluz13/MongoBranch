@@ -24,9 +24,14 @@ import { StashManager } from "../core/stash.ts";
 import { AnonymizeEngine } from "../core/anonymize.ts";
 import { ReflogManager } from "../core/reflog.ts";
 import { SearchIndexManager } from "../core/search-index.ts";
-import type { MongoBranchConfig } from "../core/types.ts";
+import { AuditChainManager } from "../core/audit-chain.ts";
+import { CheckpointManager } from "../core/checkpoint.ts";
+import { ExecutionGuard } from "../core/execution-guard.ts";
+import { BranchWatcher, type BranchChangeEvent } from "../core/watcher.ts";
+import type { MongoBranchConfig, AuditEntryType } from "../core/types.ts";
 
 interface McpToolResult {
+  [key: string]: unknown;
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
 }
@@ -63,6 +68,18 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
   const anonymizeEngine = new AnonymizeEngine(client, config);
   const reflogManager = new ReflogManager(client, config);
   const searchIndexManager = new SearchIndexManager(client, config);
+  const auditChain = new AuditChainManager(client, config);
+  const checkpointManager = new CheckpointManager(client, config, commitEngine, branchManager);
+  const executionGuard = new ExecutionGuard(client, config);
+  const activeWatchers = new Map<string, { watcher: BranchWatcher; events: BranchChangeEvent[] }>();
+
+  // Fire-and-forget audit chain append — never blocks the operation
+  function auditAppend(
+    entryType: AuditEntryType,
+    branchName: string, actor: string, action: string, detail: string,
+  ): void {
+    auditChain.append({ entryType, branchName, actor, action, detail }).catch(() => {});
+  }
 
   // Initialize all managers (create indexes)
   let initialized = false;
@@ -80,11 +97,14 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
       await scopeManager.initialize();
       await stashManager.initialize();
       await reflogManager.initialize();
+      await auditChain.initialize();
+      await checkpointManager.initialize();
+      await executionGuard.initialize();
       initialized = true;
     }
   }
 
-  return {
+  const tools = {
     /**
      * create_branch — Create an isolated data branch for an agent.
      */
@@ -94,6 +114,9 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
       from?: string;
       createdBy?: string;
       readOnly?: boolean;
+      lazy?: boolean;
+      collections?: string[];
+      schemaOnly?: boolean;
     }): Promise<McpToolResult> {
       try {
         await ensureInit();
@@ -103,7 +126,12 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
           from: args.from,
           createdBy: args.createdBy,
           readOnly: args.readOnly,
+          lazy: args.lazy,
+          collections: args.collections,
+          schemaOnly: args.schemaOnly,
         });
+        auditAppend("branch", branch.name, args.createdBy ?? "unknown", "create_branch",
+          `Created branch "${branch.name}" from ${args.from ?? "main"}, collections: ${branch.collections.join(", ")}`);
         return textResult(
           `Branch "${branch.name}" created.\n` +
           `Database: ${branch.branchDatabase}\n` +
@@ -112,6 +140,38 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         return errorResult(`Failed to create branch: ${msg}`);
+      }
+    },
+
+    /**
+     * system_status — System overview: active branches, storage, queue depth.
+     */
+    async system_status(): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const status = await branchManager.getSystemStatus();
+        const formatBytes = (b: number) =>
+          b < 1024 ? `${b}B` : b < 1048576 ? `${(b/1024).toFixed(1)}KB` : `${(b/1048576).toFixed(1)}MB`;
+        const lines: string[] = [
+          `MongoBranch System Status`,
+          `─────────────────────────`,
+          `Active branches: ${status.activeBranches}`,
+          `Merged branches: ${status.mergedBranches}`,
+          `Total storage: ${formatBytes(status.totalStorageBytes)}`,
+          `Last activity: ${status.recentActivity?.toISOString() ?? "never"}`,
+          ``,
+        ];
+        for (const b of status.branches) {
+          const flags = [
+            b.lazy ? "lazy" : null,
+            b.readOnly ? "readonly" : null,
+          ].filter(Boolean).join(", ");
+          lines.push(`  ${b.name} [${b.status}] ${b.collections} collections, ${formatBytes(b.storageBytes)}${flags ? ` (${flags})` : ""}`);
+        }
+        return textResult(lines.join("\n"));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to get system status: ${msg}`);
       }
     },
 
@@ -175,6 +235,10 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
           detectConflicts: args.detectConflicts,
           conflictStrategy: (args.conflictStrategy as any) ?? "abort",
         });
+        if (!result.dryRun) {
+          auditAppend("merge", args.source, "system", "merge_branch",
+            `Merged "${result.sourceBranch}" → "${result.targetBranch}": +${result.documentsAdded} -${result.documentsRemoved} ~${result.documentsModified}`);
+        }
         const prefix = result.dryRun ? "Dry-run preview" : "Merged";
         let output =
           `${prefix} "${result.sourceBranch}" → "${result.targetBranch}"\n` +
@@ -204,6 +268,8 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
       try {
         await ensureInit();
         const result = await branchManager.deleteBranch(args.name);
+        auditAppend("branch", args.name, "system", "delete_branch",
+          `Deleted branch "${result.name}", dropped DB: ${result.databaseDropped}`);
         return textResult(
           `Branch "${result.name}" deleted.\n` +
           `Database dropped: ${result.databaseDropped}\n` +
@@ -654,6 +720,100 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
     },
 
     /**
+     * branch_aggregate — Run an aggregation pipeline on a branch collection.
+     */
+    async branch_aggregate(args: {
+      branchName: string;
+      collection: string;
+      pipeline: Record<string, unknown>[];
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const docs = await proxy.aggregate(args.branchName, args.collection, args.pipeline);
+        return textResult(JSON.stringify(docs, null, 2));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to aggregate: ${msg}`);
+      }
+    },
+
+    /**
+     * branch_count — Count documents matching a filter on a branch collection.
+     */
+    async branch_count(args: {
+      branchName: string;
+      collection: string;
+      filter?: Record<string, unknown>;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const count = await proxy.countDocuments(args.branchName, args.collection, args.filter ?? {});
+        return textResult(JSON.stringify({ collection: args.collection, count }, null, 2));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to count: ${msg}`);
+      }
+    },
+
+    /**
+     * branch_list_collections — List all collections in a branch database.
+     */
+    async branch_list_collections(args: {
+      branchName: string;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const collections = await proxy.listCollections(args.branchName);
+        return textResult(JSON.stringify(collections, null, 2));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to list collections: ${msg}`);
+      }
+    },
+
+    /**
+     * branch_update_many — Update multiple documents on a branch collection.
+     */
+    async branch_update_many(args: {
+      branchName: string;
+      collection: string;
+      filter: Record<string, unknown>;
+      update: Record<string, unknown>;
+      performedBy?: string;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const result = await proxy.updateMany(
+          args.branchName, args.collection, args.filter, args.update, args.performedBy
+        );
+        return textResult(
+          `Updated ${result.modifiedCount} of ${result.matchedCount} matched documents`
+        );
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to updateMany: ${msg}`);
+      }
+    },
+
+    /**
+     * branch_schema — Infer the schema of a branch collection by sampling documents.
+     */
+    async branch_schema(args: {
+      branchName: string;
+      collection: string;
+      sampleSize?: number;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const schema = await proxy.inferSchema(args.branchName, args.collection, args.sampleSize);
+        return textResult(JSON.stringify(schema, null, 2));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to infer schema: ${msg}`);
+      }
+    },
+
+    /**
      * branch_oplog — Get the operation log for a branch.
      */
     async branch_oplog(args: {
@@ -712,6 +872,8 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
           message: args.message,
           author: args.author,
         });
+        auditAppend("commit", args.branchName, args.author ?? "unknown", "commit",
+          `Commit ${commit.hash.slice(0, 12)} on "${args.branchName}": ${args.message}`);
         return textResult(
           `Commit created on "${args.branchName}"\n` +
           `Hash: ${commit.hash}\n` +
@@ -836,12 +998,8 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
       }
     },
 
-    // ── Three-Way Merge Tools (Wave 4) ──────────────────────
+    // ── Cherry-Pick & Revert Tools (Wave 4) ───────────────────
 
-    /**
-     * merge_three_way — Git-like three-way merge using common ancestor.
-     * Auto-merges non-overlapping changes, detects per-field conflicts.
-     */
     /**
      * cherry_pick — Apply a single commit's changes to a target branch.
      */
@@ -948,6 +1106,10 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
           }
         );
 
+        if (result.success) {
+          auditAppend("merge", args.sourceBranch, args.author ?? "system", "three_way_merge",
+            `3-way merge "${args.sourceBranch}" → "${args.targetBranch}": +${result.documentsAdded} -${result.documentsRemoved} ~${result.documentsModified}`);
+        }
         if (!result.success && result.conflicts.length > 0) {
           const conflictLines = result.conflicts.map((c) =>
             `  ⚠️ ${c.collection}.${c.documentId} → field "${c.field}": ours=${JSON.stringify(c.ours)}, theirs=${JSON.stringify(c.theirs)}`
@@ -1053,14 +1215,13 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
     }): Promise<McpToolResult> {
       try {
         await ensureInit();
-        const docs = await timeTravelEngine.findAt({
+        const result = await timeTravelEngine.findAt({
           branchName: args.branchName,
           collection: args.collection,
-          commitHash: args.commitHash,
-          timestamp: args.timestamp ? new Date(args.timestamp) : undefined,
+          at: args.commitHash ?? args.timestamp ?? "",
           filter: args.filter,
         });
-        return textResult(JSON.stringify({ count: docs.length, documents: docs }, null, 2));
+        return textResult(JSON.stringify({ count: result.documents.length, documents: result.documents }, null, 2));
       } catch (err: unknown) {
         return errorResult(`Time travel failed: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -1074,9 +1235,12 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
       try {
         await ensureInit();
         const result = await timeTravelEngine.blame(args.branchName, args.collection, args.documentId);
-        const lines = Object.entries(result.fields).map(([field, info]) =>
-          `  ${field}: commit ${info.commitHash.slice(0, 8)} by ${info.author} — "${info.message}"`
-        );
+        const lines = Object.entries(result.fields).map(([field, entries]) => {
+          const latest = entries[0];
+          return latest
+            ? `  ${field}: commit ${latest.commitHash.slice(0, 8)} by ${latest.author} — "${latest.message}"`
+            : `  ${field}: no history`;
+        });
         return textResult(`Blame for ${args.collection}/${args.documentId}:\n${lines.join("\n")}`);
       } catch (err: unknown) {
         return errorResult(`Blame failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1133,6 +1297,8 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
       try {
         await ensureInit();
         const { deployRequest, mergeResult } = await deployRequestManager.execute(args.id);
+        auditAppend("deploy", mergeResult.sourceBranch, deployRequest.createdBy, "execute_deploy",
+          `Deploy #${deployRequest.id}: ${mergeResult.sourceBranch} → ${mergeResult.targetBranch}`);
         return textResult(
           `Deploy request #${deployRequest.id} executed!\n` +
           `Merged: ${mergeResult.sourceBranch} → ${mergeResult.targetBranch}\n` +
@@ -1390,5 +1556,232 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
         return errorResult(`Failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
+
+    // ── Audit Chain Tools (Wave 9) ─────────────────────────────
+
+    verify_audit_chain: async () => {
+      try {
+        await ensureInit();
+        const result = await auditChain.verify();
+        if (result.valid) {
+          return textResult(
+            `✅ Audit chain VALID\n` +
+            `Total entries: ${result.totalEntries}\n` +
+            `First: seq=${result.firstEntry?.sequence} (${result.firstEntry?.entryType})\n` +
+            `Last: seq=${result.lastEntry?.sequence} (${result.lastEntry?.entryType} — ${result.lastEntry?.action})`
+          );
+        }
+        return textResult(
+          `❌ Audit chain BROKEN at sequence ${result.brokenAt}\n` +
+          `Reason: ${result.brokenReason}\n` +
+          `Total entries: ${result.totalEntries}`
+        );
+      } catch (err: unknown) {
+        return errorResult(`Verify failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    export_audit_chain_certified: async (args: { format?: string }) => {
+      try {
+        await ensureInit();
+        const format = (args.format === "csv" ? "csv" : "json") as "json" | "csv";
+        const exported = await auditChain.exportChain(format);
+        return textResult(exported);
+      } catch (err: unknown) {
+        return errorResult(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    get_audit_chain: async (args: { branchName?: string; limit?: number; from?: string; to?: string }) => {
+      try {
+        await ensureInit();
+        let entries;
+        if (args.branchName) {
+          entries = await auditChain.getByBranch(args.branchName, args.limit ?? 50);
+        } else if (args.from && args.to) {
+          entries = await auditChain.getByTimeRange(new Date(args.from), new Date(args.to));
+        } else {
+          entries = await auditChain.getChain(args.limit ?? 50);
+        }
+        const lines = entries.map(e =>
+          `[${e.sequence}] ${e.entryType} | ${e.branchName} | ${e.action} | ${e.actor} | ${e.timestamp.toISOString()} | ${e.chainHash.slice(0, 12)}…`
+        );
+        return textResult(
+          `Audit chain entries (${entries.length}):\n${lines.join("\n")}`
+        );
+      } catch (err: unknown) {
+        return errorResult(`Get chain failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    // ── Checkpoint Tools (Wave 9) ──────────────────────────────
+
+    create_checkpoint: async (args: { branchName: string; label?: string; ttlMinutes?: number; createdBy?: string }) => {
+      try {
+        await ensureInit();
+        const result = await checkpointManager.create(args.branchName, {
+          label: args.label,
+          ttlMinutes: args.ttlMinutes,
+          createdBy: args.createdBy,
+        });
+        auditAppend("checkpoint", args.branchName, args.createdBy ?? "system", "create_checkpoint",
+          `Checkpoint ${result.id} on "${args.branchName}": ${result.collectionsSnapshotted} collections, ${result.documentCount} docs`);
+        return textResult(
+          `✅ Checkpoint created on "${args.branchName}"\n` +
+          `ID: ${result.id}\n` +
+          `Commit: ${result.commitHash.slice(0, 12)}…\n` +
+          `Snapshotted: ${result.collectionsSnapshotted} collections, ${result.documentCount} documents`
+        );
+      } catch (err: unknown) {
+        return errorResult(`Checkpoint failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    restore_checkpoint: async (args: { branchName: string; checkpointId: string }) => {
+      try {
+        await ensureInit();
+        const result = await checkpointManager.restore(args.branchName, args.checkpointId);
+        auditAppend("checkpoint", args.branchName, "system", "restore_checkpoint",
+          `Restored "${args.branchName}" to checkpoint ${args.checkpointId}: ${result.collectionsRestored} collections, ${result.documentsRestored} docs`);
+        return textResult(
+          `✅ Branch "${result.branchName}" restored to checkpoint ${result.checkpointId}\n` +
+          `Collections restored: ${result.collectionsRestored}\n` +
+          `Documents restored: ${result.documentsRestored}\n` +
+          `Commits rolled back: ${result.commitsRolledBack}`
+        );
+      } catch (err: unknown) {
+        return errorResult(`Restore failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    list_checkpoints: async (args: { branchName: string }) => {
+      try {
+        await ensureInit();
+        const checkpoints = await checkpointManager.list(args.branchName);
+        if (checkpoints.length === 0) {
+          return textResult(`No checkpoints on "${args.branchName}"`);
+        }
+        const lines = checkpoints.map(cp =>
+          `${cp.id} | ${cp.label ?? "(no label)"} | ${cp.commitHash.slice(0, 12)}… | ${cp.createdBy} | ${cp.createdAt.toISOString()}${cp.expiresAt ? ` | expires: ${cp.expiresAt.toISOString()}` : ""}`
+        );
+        return textResult(`Checkpoints on "${args.branchName}" (${checkpoints.length}):\n${lines.join("\n")}`);
+      } catch (err: unknown) {
+        return errorResult(`List failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    // ── Execution Guard Tools (Wave 9) ─────────────────────────
+
+    /**
+     * Execute any write operation with idempotency guarantee.
+     * If requestId was already executed, returns the cached result.
+     */
+    guarded_execute: async (args: {
+      requestId: string;
+      tool: string;
+      toolArgs: Record<string, unknown>;
+    }) => {
+      try {
+        await ensureInit();
+        const { requestId, tool, toolArgs } = args;
+
+        // Look up the tool handler
+        const handler = (tools as any)[tool];
+        if (!handler || typeof handler !== "function") {
+          return errorResult(`Unknown tool: ${tool}`);
+        }
+
+        const { result, cached } = await executionGuard.execute(
+          requestId, tool, (toolArgs as any).branchName ?? "unknown", toolArgs,
+          async () => handler(toolArgs),
+        );
+
+        if (cached) {
+          // Annotate the cached result
+          const content = result?.content ?? [];
+          return {
+            content: [
+              { type: "text" as const, text: `⚡ CACHED (requestId: ${requestId})\n` },
+              ...content,
+            ],
+          };
+        }
+        return result;
+      } catch (err: unknown) {
+        return errorResult(`Guard failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    // ── Webhook Tools (Wave 9) ───────────────────────────────────
+
+    register_webhook: async (args: {
+      name: string; event: string; url: string; secret?: string; timeout?: number;
+    }) => {
+      try {
+        await ensureInit();
+        const reg = await hookManager.registerWebhook(
+          args.name, args.event as any, args.url,
+          { secret: args.secret, timeout: args.timeout },
+        );
+        return textResult(`🔗 Webhook "${reg.name}" registered for ${reg.event} → ${args.url}`);
+      } catch (err: unknown) {
+        return errorResult(`Webhook registration failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    // ── Branch Watcher Tools (Wave 9) ────────────────────────────
+
+    watch_branch: async (args: { branchName: string }) => {
+      try {
+        await ensureInit();
+        if (activeWatchers.has(args.branchName)) {
+          return textResult(`Already watching "${args.branchName}"`);
+        }
+        const watcher = new BranchWatcher(client, config);
+        const events: BranchChangeEvent[] = [];
+        watcher.on((event) => { events.push(event); });
+        await watcher.watch(args.branchName);
+        activeWatchers.set(args.branchName, { watcher, events });
+        return textResult(`👁️ Now watching "${args.branchName}" for changes`);
+      } catch (err: unknown) {
+        return errorResult(`Watch failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    stop_watch: async (args: { branchName: string }) => {
+      try {
+        const entry = activeWatchers.get(args.branchName);
+        if (!entry) return textResult(`Not watching "${args.branchName}"`);
+        await entry.watcher.stop();
+        activeWatchers.delete(args.branchName);
+        return textResult(`⏹️ Stopped watching "${args.branchName}"`);
+      } catch (err: unknown) {
+        return errorResult(`Stop failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    get_watch_events: async (args: { branchName: string; since?: string }) => {
+      try {
+        const entry = activeWatchers.get(args.branchName);
+        if (!entry) return textResult(`Not watching "${args.branchName}". Call watch_branch first.`);
+        let events = entry.events;
+        if (args.since) {
+          const sinceDate = new Date(args.since);
+          events = events.filter(e => e.timestamp > sinceDate);
+        }
+        if (events.length === 0) return textResult(`No new events on "${args.branchName}"`);
+        const lines = events.map(e =>
+          `${e.type.toUpperCase()} | ${e.collection ?? "db"} | ${e.documentId ?? ""} | ${e.timestamp.toISOString()}`
+        );
+        return textResult(`Events on "${args.branchName}" (${events.length}):\n${lines.join("\n")}`);
+      } catch (err: unknown) {
+        return errorResult(`Events failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+
+    // Expose internals for testing
+    _executionGuard: executionGuard,
+    _activeWatchers: activeWatchers,
   };
+  return tools;
 }

@@ -4,6 +4,7 @@
  * Creates, lists, switches, and deletes MongoDB database branches.
  * Each branch = a separate database with copied data from source.
  */
+import { MongoServerError } from "mongodb";
 import type { MongoClient, Db } from "mongodb";
 import {
   type BranchMetadata,
@@ -15,6 +16,7 @@ import {
   type MongoBranchConfig,
   MAIN_BRANCH,
   META_COLLECTION,
+  COMMITS_COLLECTION,
 } from "./types.ts";
 
 const BRANCH_NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._\-\/]*$/;
@@ -33,6 +35,28 @@ export class BranchManager {
 
   async initialize(): Promise<void> {
     const col = this.metaDb.collection(META_COLLECTION);
+
+    // $jsonSchema validation: prevent malformed branch metadata (14.3)
+    await this.metaDb.command({
+      collMod: META_COLLECTION,
+      validator: {
+        $jsonSchema: {
+          bsonType: "object",
+          required: ["name", "status", "branchDatabase", "createdAt"],
+          properties: {
+            name: { bsonType: "string", minLength: 1, maxLength: 200 },
+            status: { enum: ["active", "merged", "deleted"] },
+            branchDatabase: { bsonType: "string" },
+            parentBranch: { bsonType: "string" },
+            headCommit: { bsonType: "string" },
+            createdAt: { bsonType: "date" },
+            updatedAt: { bsonType: "date" },
+          },
+        },
+      },
+      validationLevel: "moderate", // Only validate inserts + updates, not existing docs
+      validationAction: "error",
+    }).catch(() => {}); // Collection may not exist yet on first run
 
     // Migrate: drop any old-style unique index on name (without partial filter)
     // that blocks re-creation of deleted branches.
@@ -56,9 +80,14 @@ export class BranchManager {
 
     // Partial unique index: only enforce uniqueness for active branches.
     // Deleted/merged branches don't block re-creation of the same name.
+    // Collation strength:2 = case-insensitive (Feature/X and feature/x collide).
     await col.createIndex(
       { name: 1 },
-      { unique: true, partialFilterExpression: { status: "active" } }
+      {
+        unique: true,
+        partialFilterExpression: { status: "active" },
+        collation: { locale: "en", strength: 2 },
+      }
     ).catch(() => {
       // Index may already exist with correct definition — fine
     });
@@ -115,15 +144,46 @@ export class BranchManager {
 
     // Discover collections in source (exclude system collections)
     const collectionInfos = await sourceDb.listCollections().toArray();
-    const collections = collectionInfos
+    let collections = collectionInfos
       .filter((c) => !c.name.startsWith("system."))
       .map((c) => c.name);
 
+    // Partial branching: filter to only requested collections
+    if (options.collections && options.collections.length > 0) {
+      const requested = new Set(options.collections);
+      const available = new Set(collections);
+      const missing = options.collections.filter((c) => !available.has(c));
+      if (missing.length > 0) {
+        throw new Error(`Collections not found in source: ${missing.join(", ")}`);
+      }
+      collections = collections.filter((c) => requested.has(c));
+    }
+
     const isLazy = options.lazy ?? false;
+    const isSchemaOnly = options.schemaOnly ?? false;
 
     // Copy collections unless lazy mode (copy-on-write)
     if (!isLazy) {
-      await this.copyCollections(sourceDb, branchDb, collections);
+      if (isSchemaOnly) {
+        await this.copySchemaOnly(sourceDb, branchDb, collections);
+      } else {
+        await this.copyCollections(sourceDb, branchDb, collections);
+      }
+    }
+
+    // Calculate nesting depth
+    let parentDepth = 0;
+    if (from !== MAIN_BRANCH) {
+      const parentMeta = await this.metaDb
+        .collection<BranchMetadata>(META_COLLECTION)
+        .findOne({ name: from, status: { $ne: "deleted" } });
+      if (parentMeta) {
+        parentDepth = (parentMeta.parentDepth ?? 0) + 1;
+      }
+      const maxDepth = options.maxDepth ?? 5;
+      if (parentDepth > maxDepth) {
+        throw new Error(`Max branch nesting depth (${maxDepth}) exceeded. Current depth would be ${parentDepth}`);
+      }
     }
 
     const now = new Date();
@@ -138,6 +198,7 @@ export class BranchManager {
       createdBy: createdBy ?? "unknown",
       collections,
       description,
+      parentDepth,
       ...(options.readOnly ? { readOnly: true } : {}),
       ...(isLazy ? { lazy: true, materializedCollections: [] } : {}),
       ...(options.ttlMinutes ? { expiresAt: new Date(now.getTime() + options.ttlMinutes * 60_000) } : {}),
@@ -154,6 +215,144 @@ export class BranchManager {
     return this.metaDb
       .collection<BranchMetadata>(META_COLLECTION)
       .findOne({ name, status: { $ne: "deleted" } });
+  }
+
+  /**
+   * Get branch metadata enriched with head commit info via $lookup.
+   * Single query instead of two separate lookups.
+   */
+  async getBranchWithHead(name: string): Promise<(BranchMetadata & {
+    headCommitInfo?: { message: string; author: string; timestamp: Date; parentHashes: string[] };
+  }) | null> {
+    const results = await this.metaDb
+      .collection<BranchMetadata>(META_COLLECTION)
+      .aggregate([
+        { $match: { name, status: { $ne: "deleted" } } },
+        { $lookup: {
+            from: COMMITS_COLLECTION,
+            localField: "headCommit",
+            foreignField: "hash",
+            as: "_headCommitDocs",
+        }},
+        { $addFields: {
+            headCommitInfo: { $arrayElemAt: ["$_headCommitDocs", 0] },
+        }},
+        { $project: { _headCommitDocs: 0 } },
+      ])
+      .toArray();
+
+    return (results[0] as any) ?? null;
+  }
+
+  /**
+   * Get storage stats for a branch database using $collStats.
+   * Returns per-collection sizes and totals in a single server-side pipeline.
+   */
+  async getBranchStats(branchName: string): Promise<{
+    totalDocuments: number;
+    totalStorageBytes: number;
+    collections: Array<{ name: string; count: number; storageBytes: number }>;
+  }> {
+    const db = this.resolveDatabase(branchName);
+    const collNames = (await db.listCollections().toArray())
+      .map((c) => c.name)
+      .filter((n) => !n.startsWith("system."));
+
+    let totalDocuments = 0;
+    let totalStorageBytes = 0;
+    const collections: Array<{ name: string; count: number; storageBytes: number }> = [];
+
+    for (const name of collNames) {
+      const [stats] = await db.collection(name).aggregate([
+        { $collStats: { storageStats: {} } },
+      ]).toArray().catch(() => [null]);
+
+      if (stats?.storageStats) {
+        const count = stats.storageStats.count ?? 0;
+        const storageBytes = stats.storageStats.size ?? 0;
+        totalDocuments += count;
+        totalStorageBytes += storageBytes;
+        collections.push({ name, count, storageBytes });
+      } else {
+        // Fallback: use estimatedDocumentCount
+        const count = await db.collection(name).estimatedDocumentCount();
+        totalDocuments += count;
+        collections.push({ name, count, storageBytes: 0 });
+      }
+    }
+
+    return { totalDocuments, totalStorageBytes, collections };
+  }
+
+  /**
+   * Quick branch summary using estimatedDocumentCount (1.15).
+   * Much faster than countDocuments for approximate totals.
+   */
+  async getBranchSummary(): Promise<{
+    totalBranches: number;
+    activeBranches: number;
+  }> {
+    const col = this.metaDb.collection(META_COLLECTION);
+    const total = await col.estimatedDocumentCount();
+    const active = await col.countDocuments({ status: "active" });
+    return { totalBranches: total, activeBranches: active };
+  }
+
+  /**
+   * Comprehensive system status: active branches, storage, recent activity.
+   */
+  async getSystemStatus(): Promise<{
+    activeBranches: number;
+    mergedBranches: number;
+    totalStorageBytes: number;
+    branches: Array<{
+      name: string;
+      status: string;
+      createdAt: Date;
+      collections: number;
+      storageBytes: number;
+      lazy: boolean;
+      readOnly: boolean;
+    }>;
+    recentActivity: Date | null;
+  }> {
+    const all = await this.metaDb
+      .collection<BranchMetadata>(META_COLLECTION)
+      .find({ status: { $ne: "deleted" } })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    let totalStorageBytes = 0;
+    const branches: Array<{
+      name: string; status: string; createdAt: Date;
+      collections: number; storageBytes: number; lazy: boolean; readOnly: boolean;
+    }> = [];
+
+    for (const b of all) {
+      let storageBytes = 0;
+      if (b.status === "active") {
+        try {
+          const stats = await this.getBranchStats(b.name);
+          storageBytes = stats.totalStorageBytes;
+        } catch { /* branch DB may not exist yet for lazy */ }
+      }
+      totalStorageBytes += storageBytes;
+      branches.push({
+        name: b.name,
+        status: b.status,
+        createdAt: b.createdAt,
+        collections: b.collections?.length ?? 0,
+        storageBytes,
+        lazy: !!(b as any).lazy,
+        readOnly: !!(b as any).readOnly,
+      });
+    }
+
+    const active = all.filter((b) => b.status === "active").length;
+    const merged = all.filter((b) => b.status === "merged").length;
+    const recentActivity = all.length > 0 ? all[0].updatedAt : null;
+
+    return { activeBranches: active, mergedBranches: merged, totalStorageBytes, branches, recentActivity };
   }
 
   async listBranches(options?: BranchListOptions): Promise<BranchMetadata[]> {
@@ -183,7 +382,7 @@ export class BranchManager {
     const newExpiry = new Date(Date.now() + additionalMinutes * 60_000);
     await this.metaDb.collection(META_COLLECTION).updateOne(
       { name, status: { $ne: "deleted" } },
-      { $set: { expiresAt: newExpiry, updatedAt: new Date() } }
+      { $set: { expiresAt: newExpiry }, $currentDate: { updatedAt: true } }
     );
     return newExpiry;
   }
@@ -198,12 +397,12 @@ export class BranchManager {
     if (expiresAt === null) {
       await this.metaDb.collection(META_COLLECTION).updateOne(
         { name, status: { $ne: "deleted" } },
-        { $unset: { expiresAt: "" }, $set: { updatedAt: new Date() } }
+        { $unset: { expiresAt: "" }, $currentDate: { updatedAt: true } }
       );
     } else {
       await this.metaDb.collection(META_COLLECTION).updateOne(
         { name, status: { $ne: "deleted" } },
-        { $set: { expiresAt, updatedAt: new Date() } }
+        { $set: { expiresAt }, $currentDate: { updatedAt: true } }
       );
     }
   }
@@ -215,7 +414,7 @@ export class BranchManager {
     const branch = await this.getBranch(name);
     if (!branch) throw new Error(`Branch "${name}" not found`);
 
-    const sourceDb = this.resolveDatabase(branch.parentBranch);
+    const sourceDb = this.resolveDatabase(branch.parentBranch ?? "main");
     const branchDb = this.client.db(branch.branchDatabase);
 
     // Drop all existing collections in the branch
@@ -237,7 +436,7 @@ export class BranchManager {
     // Update metadata
     await this.metaDb.collection(META_COLLECTION).updateOne(
       { name, status: { $ne: "deleted" } },
-      { $set: { collections, updatedAt: new Date() } }
+      { $set: { collections }, $currentDate: { updatedAt: true } }
     );
 
     return (await this.getBranch(name))!;
@@ -290,7 +489,7 @@ export class BranchManager {
     // Mark as deleted in metadata
     await this.metaDb.collection(META_COLLECTION).updateOne(
       { name },
-      { $set: { status: "deleted", updatedAt: new Date() } }
+      { $set: { status: "deleted" }, $currentDate: { updatedAt: true } }
     );
 
     // If we deleted the current branch, switch back to main
@@ -322,19 +521,26 @@ export class BranchManager {
     const sourceDb = this.resolveDatabase(meta.parentBranch ?? MAIN_BRANCH);
     const branchDb = this.client.db(meta.branchDatabase);
 
-    // Copy the collection data using batched cursor iteration to avoid memory issues
-    const BATCH_SIZE = 1000;
-    const cursor = sourceDb.collection(collectionName).find({}).batchSize(BATCH_SIZE);
-    let batch: Record<string, unknown>[] = [];
-    for await (const doc of cursor) {
-      batch.push(doc as Record<string, unknown>);
-      if (batch.length >= BATCH_SIZE) {
-        await branchDb.collection(collectionName).insertMany(batch);
-        batch = [];
+    // Copy collection data using $merge aggregation (server-side, no client memory)
+    try {
+      await sourceDb.collection(collectionName).aggregate([
+        { $match: {} },
+        { $merge: {
+            into: { db: meta.branchDatabase, coll: collectionName },
+            whenMatched: "replace",
+            whenNotMatched: "insert",
+        }},
+      ]).toArray();
+    } catch (err: unknown) {
+      // NamespaceNotFound (code 26) = source collection was dropped between
+      // listCollections and $merge (TOCTOU race). Per MongoDB official error codes
+      // and Mongoose maintainer guidance, gracefully skip with empty target.
+      // Ref: https://www.mongodb.com/docs/manual/reference/error-codes/ (code 26)
+      if (err instanceof MongoServerError && err.code === 26) {
+        await branchDb.createCollection(collectionName).catch(() => {});
+      } else {
+        throw err;
       }
-    }
-    if (batch.length > 0) {
-      await branchDb.collection(collectionName).insertMany(batch);
     }
 
     // Copy indexes (source collection may not exist if it's new)
@@ -442,39 +648,19 @@ export class BranchManager {
       .filter((c) => !c.name.startsWith("system."))
       .map((c) => c.name);
 
+    // Re-copy using server-side $merge (same as copyCollections)
+    await this.copyCollections(sourceDb, branchDb, collections);
+
+    // Count restored documents
     let documentsRestored = 0;
-    const BATCH_SIZE = 1000;
     for (const collName of collections) {
-      // Batched cursor iteration to avoid memory issues
-      const cursor = sourceDb.collection(collName).find({}).batchSize(BATCH_SIZE);
-      let batch: Record<string, unknown>[] = [];
-      for await (const doc of cursor) {
-        batch.push(doc as Record<string, unknown>);
-        if (batch.length >= BATCH_SIZE) {
-          await branchDb.collection(collName).insertMany(batch);
-          documentsRestored += batch.length;
-          batch = [];
-        }
-      }
-      if (batch.length > 0) {
-        await branchDb.collection(collName).insertMany(batch);
-        documentsRestored += batch.length;
-      }
-      // Copy indexes
-      const indexes = await sourceDb.collection(collName).indexes();
-      for (const idx of indexes) {
-        if (idx.name === "_id_") continue;
-        const { key, ...indexOpts } = idx;
-        try {
-          await branchDb.collection(collName).createIndex(key, indexOpts);
-        } catch { /* index already exists */ }
-      }
+      documentsRestored += await branchDb.collection(collName).estimatedDocumentCount();
     }
 
     // Update metadata
     await this.metaDb.collection(META_COLLECTION).updateOne(
       { name },
-      { $set: { updatedAt: new Date(), collections } }
+      { $set: { collections }, $currentDate: { updatedAt: true } }
     );
 
     return {
@@ -506,33 +692,32 @@ export class BranchManager {
   }
 
   /**
-   * Copy collections from source to target using batched cursor iteration.
-   * Avoids loading entire collections into memory at once.
+   * Copy only schema (indexes + validation rules) without data.
+   * Creates empty collections with matching structure.
    */
-  private async copyCollections(
+  private async copySchemaOnly(
     sourceDb: Db,
     targetDb: Db,
     collections: string[]
   ): Promise<void> {
-    const BATCH_SIZE = 1000;
+    const collectionInfos = await sourceDb.listCollections().toArray();
+    const infoMap = new Map(collectionInfos.map((c) => [c.name, c]));
 
     for (const collName of collections) {
-      // Use cursor-based batching to avoid memory issues with large collections
-      const cursor = sourceDb.collection(collName).find({}).batchSize(BATCH_SIZE);
-      let batch: Record<string, unknown>[] = [];
-
-      for await (const doc of cursor) {
-        batch.push(doc as Record<string, unknown>);
-        if (batch.length >= BATCH_SIZE) {
-          await targetDb.collection(collName).insertMany(batch);
-          batch = [];
-        }
+      const info = infoMap.get(collName) as Record<string, unknown> | undefined;
+      const opts = (info?.options ?? {}) as Record<string, unknown>;
+      // Create collection with validation rules if present
+      const createOptions: Record<string, unknown> = {};
+      if (opts.validator) {
+        createOptions.validator = opts.validator;
       }
-
-      // Insert any remaining docs
-      if (batch.length > 0) {
-        await targetDb.collection(collName).insertMany(batch);
+      if (opts.validationLevel) {
+        createOptions.validationLevel = opts.validationLevel;
       }
+      if (opts.validationAction) {
+        createOptions.validationAction = opts.validationAction;
+      }
+      await targetDb.createCollection(collName, createOptions).catch(() => {});
 
       // Copy indexes (except default _id index)
       const indexes = await sourceDb.collection(collName).indexes();
@@ -545,6 +730,56 @@ export class BranchManager {
         } catch {
           // Index creation may fail for some types — skip
         }
+      }
+    }
+  }
+
+  /**
+   * Copy collections from source to target using server-side $merge.
+   * Zero client memory — all data stays on the MongoDB server.
+   */
+  private async copyCollections(
+    sourceDb: Db,
+    targetDb: Db,
+    collections: string[]
+  ): Promise<void> {
+    const targetDbName = targetDb.databaseName;
+
+    for (const collName of collections) {
+      try {
+        // Use $merge aggregation for server-side copy (zero client memory)
+        await sourceDb.collection(collName).aggregate([
+          { $match: {} },
+          { $merge: {
+              into: { db: targetDbName, coll: collName },
+              whenMatched: "replace",
+              whenNotMatched: "insert",
+          }},
+        ]).toArray();
+      } catch (err: unknown) {
+        // NamespaceNotFound (code 26) = source collection was dropped between
+        // listCollections and $merge (TOCTOU race in concurrent branch ops).
+        // Per MongoDB official error codes, gracefully create empty target.
+        // Ref: https://www.mongodb.com/docs/manual/reference/error-codes/ (code 26)
+        if (err instanceof MongoServerError && err.code === 26) {
+          await targetDb.createCollection(collName).catch(() => {});
+          continue;
+        }
+        throw err;
+      }
+
+      // Copy indexes (except default _id index)
+      try {
+        const indexes = await sourceDb.collection(collName).indexes();
+        for (const idx of indexes) {
+          if (idx.name === "_id_") continue;
+          const { key, ...options } = idx;
+          const { v, ...cleanOptions } = options as Record<string, unknown>;
+          await targetDb.collection(collName).createIndex(key, cleanOptions).catch(() => {});
+        }
+      } catch (err: unknown) {
+        // Source collection may have been dropped between $merge and index copy — safe to skip
+        if (!(err instanceof MongoServerError && err.code === 26)) throw err;
       }
     }
   }

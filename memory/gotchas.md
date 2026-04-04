@@ -89,3 +89,17 @@
 - MongoDB database names **cannot contain `/`** — we sanitize to `--` in DB names
 - Branch name `agent-a/fix-data` → Database `__mb_agent-a--fix-data`
 - The regex `BRANCH_NAME_REGEX` in `branch.ts` allows `/` for this purpose
+
+
+## TypeScript Gotchas
+
+### noUncheckedIndexedAccess (2026-04-03)
+- Set to `false` in `tsconfig.json` — was the sole source of 89 TS2532 "Object is possibly undefined" errors
+- All 89 errors were in test files doing `array[0].prop` — test code where we KNOW the array has elements
+- Core source files don't rely on this setting — they have explicit null checks
+- If re-enabled, add `!` (non-null assertion) after every array index access in test files
+
+### McpToolResult Index Signature
+- The MCP SDK requires tool result objects to have `[key: string]: unknown`
+- Without this, TypeScript rejects `{ content: [...], isError: false }` because of excess property checking
+- Fix: add `[key: string]: unknown` to the `McpToolResult` interface in `tools.ts`

@@ -23,15 +23,19 @@ import { BranchComparator } from "./core/compare.ts";
 import { ReflogManager } from "./core/reflog.ts";
 import { AnonymizeEngine } from "./core/anonymize.ts";
 import { SearchIndexManager } from "./core/search-index.ts";
+import { AuditChainManager } from "./core/audit-chain.ts";
+import { CheckpointManager } from "./core/checkpoint.ts";
+import { BranchProxy } from "./core/proxy.ts";
+import { OperationLog } from "./core/oplog.ts";
 import type { MongoBranchConfig } from "./core/types.ts";
-import { DEFAULT_CONFIG } from "./core/types.ts";
+import { DEFAULT_CONFIG, CLIENT_OPTIONS } from "./core/types.ts";
 
 const program = new Command();
 
 program
   .name("mb")
   .description("MongoBranch — Git-like branching for MongoDB data")
-  .version("0.1.0");
+  .version("1.0.0");
 
 /**
  * Load config: env vars → .mongobranch.yaml → defaults
@@ -72,18 +76,49 @@ function askConfirm(question: string): Promise<boolean> {
 async function withBranchManager<T>(
   fn: (manager: BranchManager, client: MongoClient) => Promise<T>
 ): Promise<T> {
-  const config = loadConfig();
-  const client = new MongoClient(config.uri);
-  try {
-    await client.connect();
+  return withClient(async (client, config) => {
     const manager = new BranchManager(client, config);
     await manager.initialize();
-    return await fn(manager, client);
-  } finally {
-    await client.close();
-  }
+    return fn(manager, client);
+  });
 }
 
+// ── Status Command ───────────────────────────────────────────
+program
+  .command("status")
+  .description("System overview — active branches, storage, recent activity")
+  .action(async () => {
+    await withBranchManager(async (manager) => {
+      const status = await manager.getSystemStatus();
+      const formatBytes = (b: number) =>
+        b < 1024 ? `${b}B` : b < 1048576 ? `${(b / 1024).toFixed(1)}KB` : `${(b / 1048576).toFixed(1)}MB`;
+
+      console.log(chalk.bold("\n  MongoBranch Status\n"));
+      console.log(`  Active branches:  ${chalk.green(String(status.activeBranches))}`);
+      console.log(`  Merged branches:  ${chalk.yellow(String(status.mergedBranches))}`);
+      console.log(`  Total storage:    ${chalk.cyan(formatBytes(status.totalStorageBytes))}`);
+      console.log(`  Last activity:    ${chalk.dim(status.recentActivity?.toISOString() ?? "never")}`);
+
+      if (status.branches.length > 0) {
+        console.log(chalk.bold("\n  Branches:\n"));
+        for (const b of status.branches) {
+          const icon = b.status === "active" ? chalk.green("●") : chalk.yellow("○");
+          const flags: string[] = [];
+          if (b.lazy) flags.push(chalk.blue("lazy"));
+          if (b.readOnly) flags.push(chalk.red("readonly"));
+          const flagStr = flags.length > 0 ? ` ${flags.join(" ")}` : "";
+          console.log(
+            `  ${icon} ${chalk.bold(b.name)} — ${b.collections} collections, ${formatBytes(b.storageBytes)}${flagStr}`
+          );
+        }
+      } else {
+        console.log(chalk.dim("\n  No branches. Create one with: mb branch create <name>"));
+      }
+      console.log();
+    });
+  });
+
+// ── Branch Commands ──────────────────────────────────────────
 const branch = program.command("branch").description("Manage data branches");
 
 branch
@@ -92,6 +127,9 @@ branch
   .option("-d, --description <text>", "Branch description")
   .option("--from <branch>", "Branch from a specific branch (default: main)")
   .option("--created-by <name>", "Creator identity (e.g. agent-id)")
+  .option("--lazy", "Lazy copy-on-write (instant create, materialize on first write)")
+  .option("--collections <list>", "Only copy these collections (comma-separated)")
+  .option("--schema-only", "Copy indexes and validators only, no data")
   .action(async (name: string, opts) => {
     await withBranchManager(async (manager) => {
       const branch = await manager.createBranch({
@@ -99,8 +137,12 @@ branch
         description: opts.description,
         from: opts.from,
         createdBy: opts.createdBy,
+        lazy: opts.lazy,
+        collections: opts.collections ? opts.collections.split(",").map((s: string) => s.trim()) : undefined,
+        schemaOnly: opts.schemaOnly,
       });
-      console.log(chalk.green(`✅ Branch "${branch.name}" created`));
+      const mode = branch.lazy ? " (lazy)" : opts.schemaOnly ? " (schema-only)" : "";
+      console.log(chalk.green(`✅ Branch "${branch.name}" created${mode}`));
       console.log(chalk.dim(`   Database: ${branch.branchDatabase}`));
       console.log(chalk.dim(`   Collections: ${branch.collections.join(", ")}`));
     });
@@ -178,10 +220,7 @@ program
   .description("Show differences between two branches (default target: main)")
   .option("--json", "Output as JSON")
   .action(async (source: string, target: string | undefined, opts) => {
-    const config = loadConfig();
-    const client = new MongoClient(config.uri);
-    try {
-      await client.connect();
+    await withClient(async (client, config) => {
       const diffEngine = new DiffEngine(client, config);
       const result = await diffEngine.diffBranches(source, target ?? "main");
 
@@ -220,9 +259,7 @@ program
         }
         console.log();
       }
-    } finally {
-      await client.close();
-    }
+    });
   });
 
 // ── Merge Command ───────────────────────────────────────────
@@ -233,10 +270,7 @@ program
   .option("--into <target>", "Target branch", "main")
   .option("--dry-run", "Preview what would change without applying")
   .action(async (source: string, opts) => {
-    const config = loadConfig();
-    const client = new MongoClient(config.uri);
-    try {
-      await client.connect();
+    await withClient(async (client, config) => {
       const mergeEngine = new MergeEngine(client, config);
       const result = await mergeEngine.merge(source, opts.into, {
         dryRun: opts.dryRun,
@@ -251,9 +285,7 @@ program
       console.log(chalk.dim(`   Documents added: ${result.documentsAdded}`));
       console.log(chalk.dim(`   Documents removed: ${result.documentsRemoved}`));
       console.log(chalk.dim(`   Documents modified: ${result.documentsModified}`));
-    } finally {
-      await client.close();
-    }
+    });
   });
 
 // ── Log Command ─────────────────────────────────────────────
@@ -263,10 +295,7 @@ program
   .description("Show event history for a branch (or all branches)")
   .option("-n, --limit <count>", "Max entries to show", "20")
   .action(async (branch: string | undefined, opts) => {
-    const config = loadConfig();
-    const client = new MongoClient(config.uri);
-    try {
-      await client.connect();
+    await withClient(async (client, config) => {
       const history = new HistoryManager(client, config);
 
       if (branch) {
@@ -299,9 +328,7 @@ program
         }
       }
       console.log();
-    } finally {
-      await client.close();
-    }
+    });
   });
 
 // ── GC Command ──────────────────────────────────────────────
@@ -310,10 +337,7 @@ program
   .command("gc")
   .description("Garbage collect merged/deleted branch databases")
   .action(async () => {
-    const config = loadConfig();
-    const client = new MongoClient(config.uri);
-    try {
-      await client.connect();
+    await withClient(async (client, config) => {
       const manager = new BranchManager(client, config);
       await manager.initialize();
       const result = await manager.garbageCollect();
@@ -325,9 +349,7 @@ program
           console.log(chalk.dim(`   Dropped: ${db}`));
         }
       }
-    } finally {
-      await client.close();
-    }
+    });
   });
 
 // ── Commit Command (Wave 4) ─────────────────────────────────
@@ -338,10 +360,7 @@ program
   .requiredOption("-m, --message <text>", "Commit message")
   .option("--author <name>", "Author of the commit")
   .action(async (branch: string, opts) => {
-    const config = loadConfig();
-    const client = new MongoClient(config.uri);
-    try {
-      await client.connect();
+    await withClient(async (client, config) => {
       const commitEngine = new CommitEngine(client, config);
       await commitEngine.initialize();
       const commit = await commitEngine.commit({
@@ -353,9 +372,7 @@ program
       console.log(chalk.dim(`   Hash: ${commit.hash.slice(0, 12)}...`));
       console.log(chalk.dim(`   Parent(s): ${commit.parentHashes.length > 0 ? commit.parentHashes.map((h: string) => h.slice(0, 8)).join(", ") : "(root)"}`));
       console.log(chalk.dim(`   Collections: ${Object.keys(commit.snapshot.collections).join(", ")}`));
-    } finally {
-      await client.close();
-    }
+    });
   });
 
 // ── Commit Log Command (Wave 4) ─────────────────────────────
@@ -365,10 +382,7 @@ program
   .description("Show commit history for a branch")
   .option("-n, --limit <count>", "Max commits to show", "20")
   .action(async (branch: string, opts) => {
-    const config = loadConfig();
-    const client = new MongoClient(config.uri);
-    try {
-      await client.connect();
+    await withClient(async (client, config) => {
       const commitEngine = new CommitEngine(client, config);
       await commitEngine.initialize();
       const log = await commitEngine.getLog(branch, parseInt(opts.limit));
@@ -384,9 +398,7 @@ program
         console.log(chalk.yellow(`  ${c.hash.slice(0, 8)}`), chalk.white(c.message));
         console.log(chalk.dim(`           ${c.author} · ${c.timestamp.toISOString()} · parents: ${parents}`));
       }
-    } finally {
-      await client.close();
-    }
+    });
   });
 
 // ── Tag Commands (Wave 4) ────────────────────────────────────
@@ -407,10 +419,7 @@ tagCmd
       console.error(chalk.red("❌ Provide --commit <hash> or --branch <name>"));
       process.exit(1);
     }
-    const config = loadConfig();
-    const client = new MongoClient(config.uri);
-    try {
-      await client.connect();
+    await withClient(async (client, config) => {
       const commitEngine = new CommitEngine(client, config);
       await commitEngine.initialize();
       const target = opts.commit ?? opts.branch;
@@ -420,19 +429,14 @@ tagCmd
         isBranch: !opts.commit && !!opts.branch,
       });
       console.log(chalk.green(`✅ Tag "${tag.name}" → ${tag.commitHash.slice(0, 12)}`));
-    } finally {
-      await client.close();
-    }
+    });
   });
 
 tagCmd
   .command("list")
   .description("List all tags")
   .action(async () => {
-    const config = loadConfig();
-    const client = new MongoClient(config.uri);
-    try {
-      await client.connect();
+    await withClient(async (client, config) => {
       const commitEngine = new CommitEngine(client, config);
       await commitEngine.initialize();
       const tags = await commitEngine.listTags();
@@ -449,26 +453,19 @@ tagCmd
         );
         if (t.message) console.log(chalk.dim(`    ${t.message}`));
       }
-    } finally {
-      await client.close();
-    }
+    });
   });
 
 tagCmd
   .command("delete <name>")
   .description("Delete a tag (the commit is NOT affected)")
   .action(async (name: string) => {
-    const config = loadConfig();
-    const client = new MongoClient(config.uri);
-    try {
-      await client.connect();
+    await withClient(async (client, config) => {
       const commitEngine = new CommitEngine(client, config);
       await commitEngine.initialize();
       await commitEngine.deleteTag(name);
       console.log(chalk.green(`✅ Tag "${name}" deleted`));
-    } finally {
-      await client.close();
-    }
+    });
   });
 
 // ── Cherry-Pick Command (Wave 4) ────────────────────────────
@@ -478,19 +475,14 @@ program
   .description("Apply a single commit's changes to a target branch")
   .option("--author <name>", "Author of the cherry-pick")
   .action(async (targetBranch: string, commitHash: string, opts) => {
-    const config = loadConfig();
-    const client = new MongoClient(config.uri);
-    try {
-      await client.connect();
+    await withClient(async (client, config) => {
       const ce = new CommitEngine(client, config);
       await ce.initialize();
       const result = await ce.cherryPick(targetBranch, commitHash, opts.author);
       console.log(chalk.green(`✅ Cherry-pick successful`));
       console.log(chalk.dim(`   Source: ${result.sourceCommitHash.slice(0, 12)}`));
       console.log(chalk.dim(`   New commit: ${result.newCommitHash.slice(0, 12)}`));
-    } finally {
-      await client.close();
-    }
+    });
   });
 
 // ── Revert Command (Wave 4) ─────────────────────────────────
@@ -500,26 +492,21 @@ program
   .description("Undo a specific commit by creating an inverse commit")
   .option("--author <name>", "Author of the revert")
   .action(async (branch: string, commitHash: string, opts) => {
-    const config = loadConfig();
-    const client = new MongoClient(config.uri);
-    try {
-      await client.connect();
+    await withClient(async (client, config) => {
       const ce = new CommitEngine(client, config);
       await ce.initialize();
       const result = await ce.revert(branch, commitHash, opts.author);
       console.log(chalk.green(`✅ Revert successful`));
       console.log(chalk.dim(`   Reverted: ${result.revertedCommitHash.slice(0, 12)}`));
       console.log(chalk.dim(`   New commit: ${result.newCommitHash.slice(0, 12)}`));
-    } finally {
-      await client.close();
-    }
+    });
   });
 
 // ── Helper for client-only commands ──────────────────────────
 
 async function withClient<T>(fn: (client: MongoClient, config: MongoBranchConfig) => Promise<T>): Promise<T> {
   const config = loadConfig();
-  const client = new MongoClient(config.uri);
+  const client = new MongoClient(config.uri, CLIENT_OPTIONS);
   try {
     await client.connect();
     return await fn(client, config);
@@ -527,6 +514,98 @@ async function withClient<T>(fn: (client: MongoClient, config: MongoBranchConfig
     await client.close();
   }
 }
+
+// ── Data Commands (Branch Proxy) ───────────────────────────
+
+program
+  .command("find <branch> <collection>")
+  .description("Query documents on a branch collection")
+  .option("--filter <json>", "MongoDB query filter as JSON")
+  .option("-n, --limit <count>", "Max documents to return")
+  .action(async (branch: string, collection: string, opts) => {
+    await withClient(async (client, config) => {
+      const bm = new BranchManager(client, config);
+      const ol = new OperationLog(client, config);
+      await ol.initialize();
+      const proxy = new BranchProxy(client, config, bm, ol);
+      const docs = await proxy.find(branch, collection, opts.filter ? JSON.parse(opts.filter) : {}, {
+        limit: opts.limit ? parseInt(opts.limit) : undefined,
+      });
+      console.log(JSON.stringify(docs, null, 2));
+    });
+  });
+
+program
+  .command("aggregate <branch> <collection>")
+  .description("Run an aggregation pipeline on a branch collection")
+  .requiredOption("-p, --pipeline <json>", "Aggregation pipeline as JSON array")
+  .action(async (branch: string, collection: string, opts) => {
+    await withClient(async (client, config) => {
+      const bm = new BranchManager(client, config);
+      const ol = new OperationLog(client, config);
+      await ol.initialize();
+      const proxy = new BranchProxy(client, config, bm, ol);
+      const docs = await proxy.aggregate(branch, collection, JSON.parse(opts.pipeline));
+      console.log(JSON.stringify(docs, null, 2));
+    });
+  });
+
+program
+  .command("count <branch> <collection>")
+  .description("Count documents matching a filter on a branch collection")
+  .option("--filter <json>", "MongoDB query filter as JSON")
+  .action(async (branch: string, collection: string, opts) => {
+    await withClient(async (client, config) => {
+      const bm = new BranchManager(client, config);
+      const ol = new OperationLog(client, config);
+      await ol.initialize();
+      const proxy = new BranchProxy(client, config, bm, ol);
+      const count = await proxy.countDocuments(branch, collection, opts.filter ? JSON.parse(opts.filter) : {});
+      console.log(chalk.bold(`📊 ${collection}: ${count} document(s)`));
+    });
+  });
+
+program
+  .command("collections <branch>")
+  .description("List all collections in a branch database")
+  .action(async (branch: string) => {
+    await withClient(async (client, config) => {
+      const bm = new BranchManager(client, config);
+      const ol = new OperationLog(client, config);
+      await ol.initialize();
+      const proxy = new BranchProxy(client, config, bm, ol);
+      const cols = await proxy.listCollections(branch);
+      if (cols.length === 0) {
+        console.log(chalk.dim("No collections found"));
+        return;
+      }
+      console.log(chalk.bold(`\n📂 Collections on "${branch}" (${cols.length}):\n`));
+      for (const c of cols) {
+        console.log(`  ${chalk.cyan(c.name)} ${chalk.dim(`[${c.type}]`)}`);
+      }
+      console.log();
+    });
+  });
+
+program
+  .command("schema <branch> <collection>")
+  .description("Infer collection schema by sampling documents")
+  .option("-n, --sample <count>", "Number of documents to sample", "100")
+  .action(async (branch: string, collection: string, opts) => {
+    await withClient(async (client, config) => {
+      const bm = new BranchManager(client, config);
+      const ol = new OperationLog(client, config);
+      await ol.initialize();
+      const proxy = new BranchProxy(client, config, bm, ol);
+      const schema = await proxy.inferSchema(branch, collection, parseInt(opts.sample));
+      console.log(chalk.bold(`\n🔍 Schema: ${collection} (sampled ${schema.totalSampled} docs)\n`));
+      for (const [field, info] of Object.entries(schema.fields)) {
+        const pct = Math.round((info.count / schema.totalSampled) * 100);
+        console.log(`  ${chalk.cyan(field.padEnd(20))} ${chalk.yellow(info.types.join(" | ").padEnd(20))} ${chalk.dim(`${pct}% present`)}`);
+      }
+      console.log();
+    });
+  });
 
 // ── Time Travel Command (Wave 6) ───────────────────────────
 
@@ -540,15 +619,14 @@ program
     await withClient(async (client, config) => {
       const engine = new TimeTravelEngine(client, config);
       await engine.initialize();
-      const docs = await engine.findAt({
+      const result = await engine.findAt({
         branchName: branch,
         collection,
-        commitHash: opts.at,
-        timestamp: opts.timestamp ? new Date(opts.timestamp) : undefined,
+        at: opts.at ?? opts.timestamp ?? "",
         filter: opts.filter ? JSON.parse(opts.filter) : undefined,
       });
-      console.log(chalk.bold(`\n📜 Time Travel: ${branch}/${collection} (${docs.length} documents)\n`));
-      for (const doc of docs) {
+      console.log(chalk.bold(`\n📜 Time Travel: ${branch}/${collection} (${result.documents.length} documents)\n`));
+      for (const doc of result.documents) {
         console.log(chalk.dim(`  ${JSON.stringify(doc, null, 0).slice(0, 120)}`));
       }
       console.log();
@@ -566,11 +644,13 @@ program
       await engine.initialize();
       const result = await engine.blame(branch, collection, documentId);
       console.log(chalk.bold(`\n🔍 Blame: ${collection}/${documentId}\n`));
-      for (const [field, info] of Object.entries(result.fields)) {
+      for (const [field, entries] of Object.entries(result.fields)) {
+        const latest = entries[0];
+        if (!latest) continue;
         console.log(
           `  ${chalk.cyan(field)}  `,
-          chalk.yellow(info.commitHash.slice(0, 8)),
-          chalk.dim(`${info.author} · "${info.message}" · ${info.timestamp.toISOString()}`)
+          chalk.yellow(latest.commitHash.slice(0, 8)),
+          chalk.dim(`${latest.author} · "${latest.message}" · ${latest.timestamp.toISOString()}`)
         );
       }
       console.log();
@@ -854,6 +934,128 @@ searchIdx.command("merge <source> <target>")
       console.log(`   Created: ${result.indexesCreated}, Updated: ${result.indexesUpdated}, Removed: ${result.indexesRemoved}`);
       if (!result.success) {
         console.log(chalk.red(`   Errors: ${result.errors.length}`));
+      }
+    });
+  });
+
+// ── mb checkpoint ─────────────────────────────────────────────
+const checkpoint = program.command("checkpoint").description("Lightweight save points for agent safety");
+
+checkpoint
+  .command("create <branch>")
+  .description("Create a checkpoint on a branch")
+  .option("--label <label>", "Optional label")
+  .option("--ttl <minutes>", "Auto-expire after N minutes")
+  .action(async (branch: string, opts) => {
+    await withClient(async (client, config) => {
+      const commitEng = new CommitEngine(client, config);
+      const branchMgr = new BranchManager(client, config);
+      await commitEng.initialize();
+      const mgr = new CheckpointManager(client, config, commitEng, branchMgr);
+      await mgr.initialize();
+      const result = await mgr.create(branch, { label: opts.label, ttlMinutes: opts.ttl ? parseInt(opts.ttl) : undefined });
+      console.log(chalk.green(`✅ Checkpoint ${result.id} created on "${branch}"`));
+      console.log(`   Commit: ${result.commitHash.slice(0, 12)}…`);
+      console.log(`   Snapshotted: ${result.collectionsSnapshotted} collections, ${result.documentCount} documents`);
+    });
+  });
+
+checkpoint
+  .command("restore <branch> <id>")
+  .description("Restore branch to a checkpoint")
+  .action(async (branch: string, id: string) => {
+    await withClient(async (client, config) => {
+      const commitEng = new CommitEngine(client, config);
+      const branchMgr = new BranchManager(client, config);
+      await commitEng.initialize();
+      const mgr = new CheckpointManager(client, config, commitEng, branchMgr);
+      await mgr.initialize();
+      const result = await mgr.restore(branch, id);
+      console.log(chalk.green(`✅ Restored "${branch}" to checkpoint ${id}`));
+      console.log(`   Collections: ${result.collectionsRestored}, Documents: ${result.documentsRestored}`);
+    });
+  });
+
+checkpoint
+  .command("list <branch>")
+  .description("List checkpoints on a branch")
+  .action(async (branch: string) => {
+    await withClient(async (client, config) => {
+      const commitEng = new CommitEngine(client, config);
+      const branchMgr = new BranchManager(client, config);
+      await commitEng.initialize();
+      const mgr = new CheckpointManager(client, config, commitEng, branchMgr);
+      await mgr.initialize();
+      const cps = await mgr.list(branch);
+      if (cps.length === 0) {
+        console.log(chalk.gray("No checkpoints"));
+        return;
+      }
+      for (const cp of cps) {
+        console.log(
+          `${chalk.cyan(cp.id)} ${chalk.yellow((cp.label ?? "").padEnd(30))} ${chalk.gray(cp.commitHash.slice(0, 12))}… ${cp.createdAt.toISOString()}`
+        );
+      }
+    });
+  });
+
+// ── mb audit ──────────────────────────────────────────────────
+const audit = program.command("audit").description("Tamper-evident audit chain (EU AI Act compliance)");
+
+audit
+  .command("verify")
+  .description("Verify the entire audit chain hash integrity")
+  .action(async () => {
+    await withClient(async (client, config) => {
+      const mgr = new AuditChainManager(client, config);
+      await mgr.initialize();
+      const result = await mgr.verify();
+      if (result.valid) {
+        console.log(chalk.green(`✅ Audit chain VALID — ${result.totalEntries} entries verified`));
+      } else {
+        console.log(chalk.red(`❌ Audit chain BROKEN at sequence ${result.brokenAt}`));
+        console.log(chalk.red(`   Reason: ${result.brokenReason}`));
+      }
+    });
+  });
+
+audit
+  .command("export")
+  .description("Export the audit chain for compliance review")
+  .option("--format <fmt>", "json or csv", "json")
+  .option("--output <file>", "Output file path")
+  .action(async (opts) => {
+    await withClient(async (client, config) => {
+      const mgr = new AuditChainManager(client, config);
+      await mgr.initialize();
+      const exported = await mgr.exportChain(opts.format as "json" | "csv");
+      if (opts.output) {
+        const { writeFileSync } = await import("node:fs");
+        writeFileSync(opts.output, exported);
+        console.log(chalk.green(`📄 Exported to ${opts.output}`));
+      } else {
+        console.log(exported);
+      }
+    });
+  });
+
+audit
+  .command("log")
+  .description("Show recent audit chain entries")
+  .option("--branch <name>", "Filter by branch")
+  .option("--limit <n>", "Max entries", "20")
+  .action(async (opts) => {
+    await withClient(async (client, config) => {
+      const mgr = new AuditChainManager(client, config);
+      await mgr.initialize();
+      const entries = opts.branch
+        ? await mgr.getByBranch(opts.branch, parseInt(opts.limit))
+        : await mgr.getChain(parseInt(opts.limit));
+      for (const e of entries) {
+        const hash = e.chainHash.slice(0, 12);
+        console.log(
+          `${chalk.gray(`[${e.sequence}]`)} ${chalk.cyan(e.entryType.padEnd(10))} ${chalk.yellow(e.branchName.padEnd(20))} ${e.action.padEnd(20)} ${chalk.gray(hash)}…`
+        );
       }
     });
   });

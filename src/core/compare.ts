@@ -99,7 +99,7 @@ export class BranchComparator {
     for (const [col, docIds] of allDocIds) {
       for (const docId of docIds) {
         const branches: Record<string, "present" | "modified" | "absent"> = {};
-        const refDoc = branchDocs.get(refBranch)?.get(col)?.get(docId);
+        const refDoc = branchDocs.get(refBranch!)?.get(col)?.get(docId);
 
         for (const branchName of branchNames) {
           const doc = branchDocs.get(branchName)?.get(col)?.get(docId);
