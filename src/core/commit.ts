@@ -21,7 +21,7 @@ import type {
   CherryPickResult,
   RevertResult,
 } from "./types.ts";
-import { COMMITS_COLLECTION, TAGS_COLLECTION, META_COLLECTION, MAIN_BRANCH, COMMIT_DATA_COLLECTION } from "./types.ts";
+import { COMMITS_COLLECTION, TAGS_COLLECTION, META_COLLECTION, MAIN_BRANCH, COMMIT_DATA_COLLECTION, sanitizeBranchDbName } from "./types.ts";
 import type { CommitData } from "./types.ts";
 
 export class CommitEngine {
@@ -142,7 +142,7 @@ export class CommitEngine {
     });
     if (!branch) return;
 
-    const dbName = branch.branchDatabase ?? `${this.config.branchPrefix}${branchName}`;
+    const dbName = branch.branchDatabase ?? `${this.config.branchPrefix}${sanitizeBranchDbName(branchName)}`;
     const db = this.client.db(dbName);
     const collections = await db.listCollections().toArray();
 

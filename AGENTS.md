@@ -128,7 +128,7 @@ At the END of every prompt, BEFORE responding to the user:
 | `src/core/history.ts` | HistoryManager class — snapshot recording, branch log |
 | `src/core/queue.ts` | MergeQueue class — ordered merge queue for concurrent agents |
 | `src/core/oplog.ts` | OperationLog class — track every write op per branch |
-| `src/core/proxy.ts` | BranchProxy class — CRUD, aggregate, count, listCollections, updateMany, inferSchema with auto-materialization |
+| `src/core/proxy.ts` | BranchProxy class — CRUD proxy with auto-materialization |
 | `src/core/commit.ts` | CommitEngine class — content-addressed commits, SHA-256, parent chains, tags, cherry-pick, revert |
 | `src/core/protection.ts` | ProtectionManager class — branch protection rules, glob patterns |
 | `src/core/hooks.ts` | HookManager class — 14 event types, pre-reject/post-fire-and-forget |
@@ -159,7 +159,7 @@ At the END of every prompt, BEFORE responding to the user:
 | `tests/core/history.test.ts` | Snapshot recording, branch log, audit trail |
 | `tests/core/queue.test.ts` | Merge queue — enqueue, FIFO, processAll |
 | `tests/core/oplog.test.ts` | Operation log — record, query, summary, undo |
-| `tests/core/proxy.test.ts` | CRUD proxy — insert/update/delete/aggregate/count/listCollections/updateMany/schema, lazy auto-materialize |
+| `tests/core/proxy.test.ts` | CRUD proxy — insert/update/delete, lazy auto-materialize |
 | `tests/core/commit.test.ts` | Commit engine — create, chain, log, common ancestor, merge commits, tags |
 | `tests/core/three-way-merge.test.ts` | Three-way merge — clean merge, conflict detection, resolution strategies |
 | `tests/core/lifecycle.test.ts` | Branch TTL, reset from parent, protection rules, hooks — Wave 5 |
@@ -174,6 +174,7 @@ At the END of every prompt, BEFORE responding to the user:
 | `tests/core/anonymize.test.ts` | Anonymization — hash/mask/null/redact strategies |
 | `tests/core/reflog.test.ts` | Reflog — record/query, survives deletion, action filter |
 | `tests/core/search-index.test.ts` | Search indexes — list/copy/diff/merge on branches |
+| `tests/core/e2e-realistic.test.ts` | Full E2E: 3 agents, 13 phases, scoping→branch→CRUD→diff→merge→audit→gc |
 | `tests/mcp/server.test.ts` | MCP tools — create/list/diff/merge via tool handlers |
 
 ### 🐳 Infrastructure

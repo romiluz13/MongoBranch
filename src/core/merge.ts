@@ -17,6 +17,7 @@ import {
   type ThreeWayMergeOptions,
   MAIN_BRANCH,
   META_COLLECTION,
+  sanitizeBranchDbName,
 } from "./types.ts";
 
 export class MergeEngine {
@@ -360,7 +361,6 @@ export class MergeEngine {
     if (branchName === MAIN_BRANCH) {
       return this.client.db(this.config.sourceDatabase);
     }
-    const safeName = branchName.replace(/\//g, "--");
-    return this.client.db(`${this.config.branchPrefix}${safeName}`);
+    return this.client.db(`${this.config.branchPrefix}${sanitizeBranchDbName(branchName)}`);
   }
 }

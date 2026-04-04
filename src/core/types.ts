@@ -642,3 +642,26 @@ export interface ExecutionReceipt {
   executedAt: Date;
   expiresAt: Date;
 }
+
+
+/**
+ * Sanitize a branch name for use as a MongoDB database name.
+ *
+ * Per the official MongoDB documentation (mongodb.com/docs/manual/reference/limits/):
+ *   - Unix/Linux: database names cannot contain  /\. "$
+ *   - Windows:    database names cannot contain  /\. "$*<>:|?
+ *   - All:        cannot contain null, must be < 64 bytes, cannot be empty
+ *
+ * Branch names are validated to allow [a-zA-Z0-9._\-\/] (see BRANCH_NAME_REGEX in branch.ts).
+ * This function replaces the two invalid characters that can appear in valid branch names:
+ *   - / (forward slash) → -- (double dash)
+ *   - . (dot)           → -dot- (dash-dot-dash)
+ *
+ * All other invalid characters (\, ", $, *, <, >, :, |, ?) are rejected by the
+ * branch name validator and never reach this function.
+ */
+export function sanitizeBranchDbName(branchName: string): string {
+  return branchName
+    .replace(/\//g, "--")
+    .replace(/\./g, "-dot-");
+}

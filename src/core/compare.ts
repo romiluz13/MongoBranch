@@ -5,7 +5,7 @@
  * Returns per-document presence matrix and overlap statistics.
  */
 import type { MongoClient } from "mongodb";
-import type { MongoBranchConfig } from "./types.ts";
+import { type MongoBranchConfig, sanitizeBranchDbName } from "./types.ts";
 
 export interface CompareEntry {
   collection: string;
@@ -59,7 +59,7 @@ export class BranchComparator {
     const allCollections = new Set<string>();
 
     for (const branchName of branchNames) {
-      const branchDbName = `${this.config.branchPrefix}${branchName}`;
+      const branchDbName = `${this.config.branchPrefix}${sanitizeBranchDbName(branchName)}`;
       const branchDb = this.client.db(branchDbName);
       const collections = await branchDb.listCollections().toArray();
       const branchMap: Map<string, Map<string, Record<string, unknown>>> = new Map();

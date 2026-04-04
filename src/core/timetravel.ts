@@ -15,7 +15,7 @@ import type {
   BlameEntry,
   BlameResult,
 } from "./types.ts";
-import { COMMITS_COLLECTION, COMMIT_DATA_COLLECTION } from "./types.ts";
+import { COMMITS_COLLECTION, COMMIT_DATA_COLLECTION, sanitizeBranchDbName } from "./types.ts";
 
 export class TimeTravelEngine {
   private client: MongoClient;
@@ -47,7 +47,7 @@ export class TimeTravelEngine {
 
     if (!branch) throw new Error(`Branch "${branchName}" not found`);
 
-    const dbName = (branch as any).branchDatabase || `${this.config.branchPrefix}${branchName}`;
+    const dbName = (branch as any).branchDatabase || `${this.config.branchPrefix}${sanitizeBranchDbName(branchName)}`;
     const db = this.client.db(dbName);
     const collections = await db.listCollections().toArray();
 

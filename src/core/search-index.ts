@@ -18,6 +18,7 @@ import {
   type SearchIndexType,
   MAIN_BRANCH,
   META_COLLECTION,
+  sanitizeBranchDbName,
 } from "./types.js";
 
 export class SearchIndexManager {
@@ -315,8 +316,7 @@ export class SearchIndexManager {
     if (branchName === MAIN_BRANCH) {
       return this.client.db(this.config.sourceDatabase);
     }
-    const safeName = branchName.replace(/\//g, "--");
-    return this.client.db(`${this.config.branchPrefix}${safeName}`);
+    return this.client.db(`${this.config.branchPrefix}${sanitizeBranchDbName(branchName)}`);
   }
 
   private async getUserCollections(db: Db): Promise<string[]> {

@@ -7,7 +7,7 @@
  * Operations: stash (save + reset), pop (restore + remove), list, drop
  */
 import type { MongoClient, Collection } from "mongodb";
-import type { MongoBranchConfig } from "./types.ts";
+import { type MongoBranchConfig, sanitizeBranchDbName } from "./types.ts";
 
 const STASH_COLLECTION = "stashes";
 
@@ -41,7 +41,7 @@ export class StashManager {
    * Stash current branch state — saves all docs, then clears collections.
    */
   async stash(branchName: string, message: string, createdBy = "cli"): Promise<StashEntry> {
-    const branchDbName = `${this.config.branchPrefix}${branchName}`;
+    const branchDbName = `${this.config.branchPrefix}${sanitizeBranchDbName(branchName)}`;
     const branchDb = this.client.db(branchDbName);
 
     // Collect all documents from all collections
@@ -95,7 +95,7 @@ export class StashManager {
     if (!entry) throw new Error(`No stash found for branch "${branchName}"`);
 
     // Restore data
-    const branchDb = this.client.db(`${this.config.branchPrefix}${branchName}`);
+    const branchDb = this.client.db(`${this.config.branchPrefix}${sanitizeBranchDbName(branchName)}`);
     for (const [colName, docs] of Object.entries(entry.data)) {
       if (docs.length > 0) {
         await branchDb.collection(colName).insertMany(docs);

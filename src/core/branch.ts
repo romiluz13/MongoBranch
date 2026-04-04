@@ -17,6 +17,7 @@ import {
   MAIN_BRANCH,
   META_COLLECTION,
   COMMITS_COLLECTION,
+  sanitizeBranchDbName,
 } from "./types.ts";
 
 const BRANCH_NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._\-\/]*$/;
@@ -122,8 +123,9 @@ export class BranchManager {
     // Clean up old deleted records with the same name
     await this.metaDb.collection(META_COLLECTION).deleteMany({ name, status: "deleted" });
 
-    // Sanitize branch name for MongoDB database name (/ is invalid in DB names)
-    const safeName = name.replace(/\//g, "--");
+    // Sanitize branch name for MongoDB database name
+    // Per MongoDB docs: /\."$ are invalid in database names on Unix/Linux
+    const safeName = sanitizeBranchDbName(name);
     const branchDatabase = `${this.config.branchPrefix}${safeName}`;
     const sourceDb = this.resolveDatabase(from);
     const branchDb = this.client.db(branchDatabase);
@@ -688,7 +690,7 @@ export class BranchManager {
     if (branchName === MAIN_BRANCH) {
       return this.client.db(this.config.sourceDatabase);
     }
-    return this.client.db(`${this.config.branchPrefix}${branchName}`);
+    return this.client.db(`${this.config.branchPrefix}${sanitizeBranchDbName(branchName)}`);
   }
 
   /**

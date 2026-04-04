@@ -85,19 +85,19 @@ beforeEach(async () => {
 
   branch = new BranchManager(client, config);
   diff = new DiffEngine(client, config);
-  merge = new MergeEngine(client, config, diff);
+  merge = new MergeEngine(client, config);
   oplog = new OperationLog(client, config);
   proxy = new BranchProxy(client, config, branch, oplog);
   history = new HistoryManager(client, config);
   commit = new CommitEngine(client, config);
-  queue = new MergeQueue(client, config, merge);
-  agent = new AgentManager(client, config, branch);
-  deploy = new DeployRequestManager(client, config, merge, diff);
-  timeTravel = new TimeTravelEngine(client, config, commit);
+  queue = new MergeQueue(client, config);
+  agent = new AgentManager(client, config);
+  deploy = new DeployRequestManager(client, config);
+  timeTravel = new TimeTravelEngine(client, config);
   scope = new ScopeManager(client, config);
   audit = new AuditChainManager(client, config);
   stash = new StashManager(client, config);
-  compare = new BranchComparator(client, config, diff);
+  compare = new BranchComparator(client, config);
   reflog = new ReflogManager(client, config);
 });
 
@@ -160,8 +160,9 @@ describe("TechCorp Sprint Day — Full Realistic E2E", () => {
     // ═══════════════════════════════════════════════════════════════
     const pricingBranchName = "pricing-bot/q4-repricing";
 
-    // Stash uses branch prefix + name directly — skip stash for agent branches
-    // (stash has a known issue with / in branch names; non-blocking for this E2E)
+    // Note: stash.stash() saves+clears working state (like git stash).
+    // For safety checkpoints without clearing, use CheckpointManager.create().
+    // We proceed directly to writes here since we trust our branch isolation.
 
     // Update CloudSync Pro price: $29.99 → $34.99
     await proxy.updateOne(pricingBranchName, "products",
@@ -306,9 +307,9 @@ describe("TechCorp Sprint Day — Full Realistic E2E", () => {
     expect(userChanges.added.length).toBe(1); // Eve
     expect(userChanges.modified.length).toBeGreaterThanOrEqual(2); // David + Carol + Engineering raises
 
-    // N-way comparison — skipped for agent branches with / (compare.ts has a known
-    // db-name sanitization gap — tracked for fix in next patch)
-    // compare.compare() tested separately in compare.test.ts with non-agent branches
+    // N-way comparison of all 3 branches
+    const comparison = await compare.compare([pricingBranchName, hrBranchName, analyticsBranchName]);
+    expect(comparison.branches.length).toBe(3);
 
     // ═══════════════════════════════════════════════════════════════
     // PHASE 7: MERGE — Pricing changes go to main via direct merge

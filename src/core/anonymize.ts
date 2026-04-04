@@ -8,7 +8,7 @@
  */
 import { createHash } from "crypto";
 import type { MongoClient } from "mongodb";
-import type { MongoBranchConfig } from "./types.ts";
+import { type MongoBranchConfig, sanitizeBranchDbName } from "./types.ts";
 import { BranchManager } from "./branch.ts";
 
 export type AnonymizeStrategy = "hash" | "mask" | "null" | "redact";
@@ -47,7 +47,7 @@ export class AnonymizeEngine {
     await this.branchManager.initialize();
     await this.branchManager.createBranch({ name: branchName });
 
-    const branchDb = this.client.db(`${this.config.branchPrefix}${branchName}`);
+    const branchDb = this.client.db(`${this.config.branchPrefix}${sanitizeBranchDbName(branchName)}`);
     let totalDocs = 0;
     let totalFields = 0;
 
