@@ -4,11 +4,11 @@
 
 ### Git-level version control for MongoDB — built for AI agents
 
-[![Tests](https://img.shields.io/badge/tests-308%20passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-340%20passing-brightgreen)]()
 [![MongoDB](https://img.shields.io/badge/MongoDB-7.x-47A248?logo=mongodb&logoColor=white)]()
-[![MCP Tools](https://img.shields.io/badge/MCP%20tools-78-blue)]()
-[![CLI Commands](https://img.shields.io/badge/CLI-44%20commands-orange)]()
-[![Engines](https://img.shields.io/badge/engines-22-purple)]()
+[![MCP Tools](https://img.shields.io/badge/MCP%20tools-87-blue)]()
+[![CLI Commands](https://img.shields.io/badge/CLI-62%20commands-orange)]()
+[![Engines](https://img.shields.io/badge/engines-26-purple)]()
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -16,9 +16,9 @@
 branch → commit → diff → merge → checkpoint → audit → deploy
 ```
 
-**308 tests. 78 MCP tools. 22 engines. Zero mocks. Real MongoDB only.**
+**340 tests. 87 MCP tools. 26 engines. Zero mocks. Real MongoDB only.**
 
-[Quick Start](#-quick-start) · [Why](#-the-problem) · [Features](#-feature-matrix) · [MCP Server](#-mcp-server--73-tools-for-ai-agents) · [CLI](#-cli--39-commands) · [Architecture](#%EF%B8%8F-architecture)
+[Quick Start](#-quick-start) · [Why](#-the-problem) · [Features](#-feature-matrix) · [MCP Server](#-mcp-server--87-tools-for-ai-agents) · [CLI](#-cli--62-commands) · [Architecture](#%EF%B8%8F-architecture)
 
 </div>
 
@@ -68,8 +68,8 @@ MongoBranch gives MongoDB the full `git` experience: **branches, commits, diffs,
 | Agent scopes + quotas | ✅ Collection-level ACLs | ❌ | ❌ |
 | Multi-agent isolation | ✅ Per-agent sandboxes | ❌ | ❌ |
 | Merge queue (FIFO atomic) | ✅ | ❌ Can't merge | ❌ |
-| MCP Server for AI agents | ✅ **78 tools** | ✅ ~10 tools | ❌ |
-| CLI | ✅ **44 commands** | ✅ | ✅ |
+| MCP Server for AI agents | ✅ **87 tools** | ✅ ~10 tools | ❌ |
+| CLI | ✅ **62 commands** | ✅ | ✅ |
 | Atlas Search index branching | ✅ | N/A | N/A |
 | Branch TTL (auto-expire) | ✅ | ✅ | ❌ |
 | **Tamper-evident audit chain** | ✅ SHA-256 hash-chain | ❌ | ❌ |
@@ -88,13 +88,21 @@ MongoBranch gives MongoDB the full `git` experience: **branches, commits, diffs,
 ## 🚀 Quick Start
 
 ```bash
+# 0. Prerequisite: Bun 1.0+ must be installed on your machine
+#    MongoBranch ships Bun-based CLI and MCP entrypoints.
+
 # 1. Install globally
 npm install -g mongobranch
 
-# 2. Start MongoDB (Atlas Local — includes search + vector support)
-docker compose up -d
+# 2. Bootstrap a fresh app workspace with auth-enabled Atlas Local preview
+mkdir my-agent-app && cd my-agent-app
+mb init --db myapp --start-local
 
-# 3. Branch → Work → Commit → Merge
+# 3. Prove the environment before touching data
+mb doctor
+mb access status
+
+# 4. Branch → Work → Commit → Merge
 mb branch create experiment --description "testing new schema"
 # ... make your changes ...
 mb commit experiment -m "restructured user fields"
@@ -106,11 +114,19 @@ mb tag create v1.0 experiment
 mb branch delete experiment  # done — branch is disposable
 ```
 
+Scoped approval rule:
+
+- Use `mb init --start-local` for new external workspaces.
+- Treat `mb doctor` + `mb access status` as the install-to-ready gate.
+- The current strongest proof is an auth-enabled Atlas Local preview consumer app that passed **22/22** install-to-restore dogfood checks.
+
 ---
 
-## 🤖 MCP Server — 78 Tools for AI Agents
+## 🤖 MCP Server — 87 Tools for AI Agents
 
-MongoBranch ships a [Model Context Protocol](https://modelcontextprotocol.io) server with **78 tools**. Drop into Claude Desktop, Cursor, Windsurf, or any MCP client:
+MongoBranch ships a [Model Context Protocol](https://modelcontextprotocol.io) server with **87 tools**. Drop into Claude Desktop, Cursor, Windsurf, or any MCP client:
+
+> Bun must be available on the host machine because `mongobranch-mcp` is shipped as a Bun entrypoint.
 
 ```json
 {
@@ -139,7 +155,7 @@ MongoBranch ships a [Model Context Protocol](https://modelcontextprotocol.io) se
 
 Main is **never touched** until merge. If the agent fails, delete the branch. Zero damage.
 
-### All 78 MCP Tools
+### All 87 MCP Tools
 
 | Category | Tools | What They Do |
 |----------|-------|-------------|
@@ -151,6 +167,7 @@ Main is **never touched** until merge. If the agent fails, delete the branch. Ze
 | **Cherry-Pick** | `cherry_pick`, `revert_commit` | Surgical apply/undo |
 | **Time Travel** | `time_travel_query`, `blame` | Any commit or timestamp |
 | **Deploy** | `open/approve/reject/execute/list_deploy_request` | PR-like workflow for data |
+| **Access Control** | `access_control_status`, `provision_branch_access`, `provision_deployer_access`, `revoke_access_identity`, `list_access_profiles` | Least-privilege MongoDB users + live enforcement probe |
 | **Protection** | `protect_branch`, `list_protections`, `remove_protection` | Glob patterns, merge-only |
 | **Hooks** | `list_hooks`, `remove_hook`, `register_webhook` | 14 events + HTTP webhooks |
 | **TTL** | `set_branch_ttl`, `reset_from_parent` | Auto-expire + re-copy from source |
@@ -172,11 +189,13 @@ Main is **never touched** until merge. If the agent fails, delete the branch. Ze
 
 ---
 
-## 📟 CLI — 44 Commands
+## 📟 CLI — 62 Commands
 
 ```bash
 # System
 mb status                         # Active branches, storage, recent activity
+mb doctor                         # Live environment probe for Atlas Local capabilities
+mb access status                  # Verify whether MongoDB access control is actually enforced
 
 # Branch lifecycle
 mb branch create <name>           # Isolated DB copy — indexes, data, validators
@@ -211,6 +230,11 @@ mb deploy execute <id>            # Ship it
 mb stash save <branch>            # Save work-in-progress
 mb stash pop <branch>             # Restore it
 mb stash list <branch>            # View stash stack
+mb drift capture <branch>         # Review fence using MongoDB operationTime
+mb drift check --branch <name>    # Detect post-review raw writes
+mb access provision-branch <name> # Least-privilege branch-scoped MongoDB user
+mb access provision-deployer      # Protected-target deploy identity
+mb access revoke <username>       # Drop provisioned user/role
 
 # Agent coordination
 mb anonymize <branch> --strategy mask         # PII redaction
@@ -244,14 +268,15 @@ mb audit log --branch <name>      # View audit trail
 ┌──────────────────────────────────────────────────────────────────┐
 │                       Your App / AI Agent                        │
 ├──────────────────────────────────────────────────────────────────┤
-│           CLI (44 cmds) · MCP Server (78 tools) · SDK            │
+│           CLI (62 cmds) · MCP Server (87 tools) · SDK            │
 ├──────────────────────────────────────────────────────────────────┤
 │  BranchManager   CommitEngine     DiffEngine      MergeEngine    │
 │  TimeTravelEngine DeployManager   BranchProxy     ScopeManager   │
 │  ProtectionManager HookManager   AgentManager     MergeQueue     │
 │  OperationLog    HistoryManager   StashManager    ReflogManager  │
 │  BranchComparator AnonymizeEngine SearchIndexManager              │
-│  AuditChainMgr   CheckpointMgr   ExecutionGuard  BranchWatcher  │
+│  AuditChainMgr   CheckpointMgr   ExecutionGuard  BranchWatcher   │
+│  AccessControlManager                                           │
 ├──────────────────────────────────────────────────────────────────┤
 │                        MongoDB Driver                            │
 ├────────────────┬──────────────────┬──────────────────────────────┤
@@ -284,6 +309,7 @@ mb audit log --branch <name>      # View audit trail
 | **Merge queue** | FIFO ordering for concurrent agent merges — no race conditions |
 | **Batched cursor iteration** | Large collections copied in 1000-doc batches — no memory blowup |
 | **Agent scopes** | Collection-level ACLs + quotas — agents can't touch what they shouldn't |
+| **Access control probe** | Restricted-user live check proves whether MongoDB is enforcing least privilege |
 
 ### What Gets Diffed
 
@@ -409,6 +435,34 @@ Duplicate protection, rejection with reasons, status filtering. The full PR work
 
 ---
 
+## 🔐 Access Control — Managed vs Enforced
+
+MongoBranch now provisions least-privilege MongoDB users for branch and deploy workflows, but it does **not** blindly assume that `createUser` means the server is enforcing RBAC.
+
+```bash
+mb access status
+# Shows authenticated user context and runs a restricted-user probe
+```
+
+If MongoDB accepts a forbidden write from that restricted probe user, MongoBranch reports the environment as `not enforced`.
+
+```bash
+mb access provision-branch feature-x \
+  --username agent_feature_x \
+  --password secret123 \
+  --collections users,orders \
+  --by codex
+```
+
+This produces:
+
+- a MongoDB role scoped to the branch database
+- a MongoDB user assigned to that role
+- a connection string agents can use for that branch
+- metadata in MongoBranch so the identity can be listed and revoked later
+
+---
+
 ## 🛡️ Branch Protection & Hooks
 
 ```typescript
@@ -485,52 +539,29 @@ Use cases: CI triggers on branch data changes, agent coordination signals, audit
 
 ---
 
-## 🧪 Testing — 308 Tests, Zero Mocks
+## 🧪 Testing — 340 Tests, Zero Mocks
 
 Every test runs against **real MongoDB** (Atlas Local Docker). No mocking. No faking. If it passes here, it works in production.
 
 ```bash
-bun test                                     # Full suite — 308 tests, 28 files
+bun run test                                 # Full suite — 340 tests, 32 files
 bun test tests/core/commit.test.ts           # Commits, tags, cherry-pick, revert
 bun test tests/core/three-way-merge.test.ts  # Three-way merge + conflict resolution
 bun test tests/core/timetravel.test.ts       # Time travel queries + blame
 bun test tests/core/deploy.test.ts           # Deploy request workflow
 bun test tests/core/scope.test.ts            # Agent permissions + ACLs
+bun test tests/core/access-control.test.ts   # MongoDB users, roles, RBAC enforcement probe
 bun test tests/core/stress-ai.test.ts        # Real Voyage AI 512-dim embeddings
 ```
 
-| Category | Tests | What's Validated |
-|----------|-------|-----------------|
-| Branch lifecycle | 9 | Create, list, validate, metadata |
-| Branch operations | 18 | Switch, delete, rollback, data isolation, materialization |
-| Diff engine | 11 | Field-level diff, indexes, validation rules |
-| Merge engine | 12 | Multi-collection, dry-run, rollback, conflict strategies |
-| Three-way merge | 5 | Common ancestor, per-field conflicts, strategies |
-| Commits & tags | 28 | SHA-256, parent chains, cherry-pick, revert, tags |
-| Time travel & blame | 9 | Query at commit/timestamp, field attribution |
-| Deploy requests | 10 | Open, approve, reject, execute, duplicate prevention |
-| TTL + protection + hooks | 23 | Branch expiry, glob patterns, 14 event hooks |
-| Proxy & oplog | 22 | CRUD proxy, aggregate, count, list-collections, update-many, schema, oplog, undo |
-| Agent manager | 9 | Registration, per-agent branches, multi-agent isolation |
-| Agent scopes & quotas | 12 | Collection ACLs, quota enforcement, violation tracking |
-| Branch compare | 5 | N-way comparison, presence matrix, stats |
-| Stash | 6 | Stash/pop/list/drop, stack ordering |
-| Reflog | 5 | Branch pointer tracking, survives deletion |
-| Anonymization | 5 | hash/mask/null/redact PII strategies |
-| Search indexes | 6 | Atlas Search index branching, copy/diff/merge |
-| History & audit | 8 | Snapshot recording, audit export (JSON/CSV) |
-| Merge queue | 7 | Enqueue, FIFO processing, queue length |
-| Stress tests | 9 | Concurrent ops, large docs, undo chains |
-| AI stress tests | 6 | Real Voyage AI 512-dim embeddings, hybrid search |
-| MCP server | 24 | All 78 tool handlers end-to-end |
-| MCP integration | 32 | Every service → MCP tool → MongoDB → response |
-| Audit chain | 9 | Hash chain integrity, tamper detection, export |
-| Checkpoints | 6 | Create/restore, multi-stack, TTL, concurrent agents |
-| Execution guard | 7 | Dedup, retry storms, concurrent same-requestId |
-| Nested branches | 6 | Depth chains, merge walk-up, max depth, isolation |
-| Webhooks | 6 | Pre/post hooks, HMAC-SHA256, timeout, concurrent |
-| Watchers | 8 | Real-time change streams, resume tokens, handler isolation |
-| **Total** | **293** | **Zero failures** |
+Current verification highlights:
+
+- branch + nested-branch lifecycle against real MongoDB
+- three-way merge, deploy drift gates, and time travel semantics
+- access control provisioning plus live restricted-user enforcement probe
+- Atlas Search / Vector Search capability checks on Atlas Local preview
+- MCP tool handlers and end-to-end consumer-app dogfooding
+- fresh external auth-enabled Atlas Local consumer app passed **22/22** install, branch, deploy, drift, backup/restore, and CLI/MCP/library checks
 
 ---
 
@@ -555,20 +586,23 @@ branchPrefix: __mb_
 
 ```bash
 bun install                       # Install dependencies
-docker compose up -d              # Atlas Local on port 27017
-bun test                          # 308 tests, ~210 seconds
+docker compose up -d              # Atlas Local on port 27017 (repo contributors)
+bun run test                      # 340 tests, ~220 seconds
 bun src/mcp/server.ts             # Start MCP server
 bun src/cli.ts branch create my-feature   # CLI
 ```
 
-### 22 Core Engines
+### 27 Core Modules
 
 ```
 src/core/
+├── access-control.ts  AccessControlManager — branch/deployer users, roles, RBAC enforcement probe
 ├── branch.ts          BranchManager — create, list, switch, delete, TTL, nested branches, CoW, gc
 ├── commit.ts          CommitEngine — SHA-256 commits, parent chains, tags, cherry-pick, revert
 ├── diff.ts            DiffEngine — documents + indexes + validation rules + three-way
 ├── merge.ts           MergeEngine — two-way, three-way, branch-to-branch, dry-run, strategies
+├── doctor.ts          EnvironmentDoctor — live Atlas Local capability probes
+├── drift.ts           DriftManager — operationTime review fences + stale-state detection
 ├── timetravel.ts      TimeTravelEngine — findAt (commit/timestamp), listCollectionsAt, blame
 ├── deploy.ts          DeployRequestManager — open, approve, reject, execute, list, get
 ├── protection.ts      ProtectionManager — branch protection rules, glob patterns
@@ -611,7 +645,7 @@ src/core/
 | **9** | **Audit chain (EU AI Act), checkpoints, execution guard, nested branches, webhooks, watchers** | **✅ Shipped** |
 | **10** | **Ship It — npm publish, release workflow, .npmignore, v1.0.0** | **✅ Shipped** |
 
-**All 10 waves shipped.** 🚀 **78 MCP tools · 44 CLI commands · 22 engines · 308 tests**
+**All 10 waves shipped.** 🚀 **87 MCP tools · 62 CLI commands · 26 engines · 340 tests**
 
 ---
 
@@ -628,7 +662,7 @@ MIT
 *Stop hoping. Start branching.*
 
 ```
-308 tests · 78 MCP tools · 44 CLI commands · 22 engines · 0 mocks · real MongoDB only
+340 tests · 87 MCP tools · 62 CLI commands · 26 engines · 0 mocks · real MongoDB only
 ```
 
 </div>

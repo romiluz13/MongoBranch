@@ -12,6 +12,13 @@ and merge results — just like developers do with code in Git.
 
 ## ✅ COMPLETED — v0.1.0
 
+### Post-Ship Hardening Evidence ✅
+- [x] `mb init --start-local` bootstraps a fresh external Bun workspace with auth-enabled Atlas Local preview
+- [x] External auth-enabled dogfood app at `/Users/rom.iluz/Dev/mongobranch-auth-dogfood` passed **22/22** install-to-restore checks
+- [x] Scoped production approval issued for Atlas Local preview with enforced least privilege
+- [ ] Benchmark/load envelope still needs a dedicated wave
+- [ ] Observability bundle still needs a dedicated wave
+
 ### Wave 1: Foundation
 
 #### Phase 1.1: Core Branch Engine ✅
@@ -48,6 +55,7 @@ and merge results — just like developers do with code in Git.
 - [x] Multi-collection merge (inserts + deletes + updates)
 - [x] `mb merge <source> --into <target>` — merge branches
 - [x] Branch marked as "merged" after successful merge
+- [x] Conflict-abort integrity — `detectConflicts: true` + `conflictStrategy: "abort"` performs zero writes and keeps the source branch active when conflicts exist
 
 ### Wave 3: Agent Integration
 
@@ -132,7 +140,9 @@ and merge results — just like developers do with code in Git.
 - [x] Branch-scoped CRUD proxy — insert/update/delete/find through MongoBranch
 - [x] Auto-materialization — lazy branches auto-copy on first write via proxy
 - [x] Read-only enforcement — proxy rejects writes to read-only branches
+- [x] Protection + scope enforcement — proxy/MCP write path blocks protected branches and unauthorized agent writes
 - [x] Lazy read fallback — unmaterialized collections read from source DB
+- [x] Nested lazy inheritance — child lazy branches read parent-visible state, not always root source
 - [x] MCP tools: `branch_insert`, `branch_update`, `branch_delete`, `branch_find`, `branch_oplog`, `branch_undo`
 - [x] 12 new TDD tests (6 oplog, 6 proxy)
 
@@ -159,7 +169,9 @@ and merge results — just like developers do with code in Git.
 - [x] `getLog(branchName, limit)` — walk commit chain from HEAD backward
 - [x] `getCommonAncestor(branchA, branchB)` — $graphLookup aggregation to find merge base
 - [x] HEAD pointer per branch — `headCommit` field on BranchMetadata
+- [x] Child branches inherit parent `headCommit` automatically for natural nested ancestry
 - [x] Merge commit support — `parentOverrides` for two-parent commits
+- [x] Commit creation is session-aware for transactional callers; merge/cherry-pick/revert commits snapshot the post-transaction state
 - [x] Indexed `__mongobranch.commits` collection (hash unique, branchName + timestamp compound)
 - [x] Types: `Commit`, `CommitOptions`, `CommitLog`, `CommitSnapshot`, `CollectionSnapshot` in `types.ts`
 - [x] MCP tools: `commit`, `get_commit`, `commit_log` — 3 new tools (total: 28)
@@ -197,6 +209,8 @@ and merge results — just like developers do with code in Git.
 - [x] Conflict strategies: `manual` (report), `ours`, `theirs` (auto-resolve)
 - [x] Merge commit with two parents created on successful merge
 - [x] Fallback: 2-way merge when no common ancestor exists
+- [x] Ancestor-backed merges materialize the stored merge-base snapshot instead of diffing against the root source DB
+- [x] Temporary merge-base DB names use compact hashed identifiers that stay within MongoDB database-name limits
 - [x] MCP tool: `merge_three_way` with dryRun, conflictStrategy, author, message (total: 32)
 - [x] Tests: 5 TDD tests — clean merge, conflict detection, theirs strategy, merge commit, fallback
 
@@ -210,6 +224,8 @@ and merge results — just like developers do with code in Git.
 - [x] `revert(branchName, commitHash, author)` — create revert commit with inverse changes
 - [x] Revert drops collections added by the commit, tracks reverted document count
 - [x] Revert creates a new "Revert: ..." commit (history preserved, not rewritten)
+- [x] Content-aware snapshot hashing + delta replay — field-only mutations now cherry-pick/revert correctly
+- [x] Cherry-pick/revert commit snapshots now reflect the post-transaction branch state
 - [x] MCP tools: `cherry_pick`, `revert_commit` — 2 new tools (total: 34)
 - [x] CLI: `mb cherry-pick <target> <hash>`, `mb revert <branch> <hash>` — 2 new commands
 - [x] Tests: 6 TDD tests — all passing (151 total across 14 files, zero new failures)
@@ -332,10 +348,20 @@ and merge results — just like developers do with code in Git.
 - [x] Deploy request stores the diff snapshot at creation time
 - [x] Integration with hooks — pre-merge hooks run on execute, post-merge fire-and-forget
 - [x] Integration with protection — `isTargetProtected` flag on deploy request
+- [x] Deploy requests can target `main` directly
 - [x] Stored in `__mongobranch.deploy_requests` collection
 - [x] MCP tools: `open_deploy_request`, `approve_deploy_request`, `execute_deploy_request`, `reject_deploy_request`, `list_deploy_requests`
 - [x] CLI: `mb deploy create`, `mb deploy list`, `mb deploy approve <id>`, `mb deploy reject <id>`, `mb deploy execute <id>`
 - [x] Tests: 10 TDD tests (create, duplicate prevention, missing branch, approve, reject, state validation, execute, merge verify, list filtering, get by ID)
+
+### Post-Audit Hardening ✅
+- [x] Protection rules enforced on the actual proxy write path
+- [x] Agent scope checks enforced through MCP CRUD tools via `agentId`
+- [x] Nested lazy branches read parent branch state correctly
+- [x] Child branch ancestry wired into the commit graph automatically
+- [x] Conflict detection uses the real ancestor snapshot when available
+- [x] Cherry-pick/revert handle content-only updates via stored commit documents
+- [x] Parallel-safe cleanup for shared `__mongobranch` metadata DB
 
 ---
 
@@ -769,3 +795,57 @@ and merge results — just like developers do with code in Git.
 - [ ] MongoDB DevRel team
 - [ ] Connect with relevant open-source maintainers
 - [ ] Conference talk proposals (MongoDB.local, Node Congress, etc.)
+
+---
+
+## Production Hardening Notes (2026-04-05)
+
+- [x] External Bun consumer app built at `/Users/rom.iluz/Dev/mongobranch-production-lab`
+- [x] External dogfood scenario passes with **13/13** checks on Atlas Local
+- [x] External CLI smoke passes: `mb status`, `mb branch list`
+- [x] Added first-class branch drift baselines via `DriftManager`, CLI (`mb drift ...`), and MCP (`capture_branch_drift_baseline`, `check_branch_drift`, `list_branch_drift_baselines`)
+- [x] External drift-baseline proof saved at `/Users/rom.iluz/Dev/mongobranch-production-lab/reports/drift-baseline-report.json`
+- [x] Added Atlas-Local-first `EnvironmentDoctor` with live probes for transactions, db change streams, pre-images, Atlas Search, and Atlas Vector Search
+- [x] Exposed environment probing through CLI (`mb doctor`) and MCP (`environment_doctor`)
+- [x] External environment report saved at `/Users/rom.iluz/Dev/mongobranch-production-lab/reports/atlas-local-doctor.json`
+- [x] Added `AccessControlManager` with least-privilege branch/deployer identity provisioning and revoke/list flows
+- [x] Added live RBAC enforcement probing through CLI (`mb access status`), MCP (`access_control_status`), and `EnvironmentDoctor`
+- [x] Re-synced public landing copy and internal active context with current verified evidence (`340` tests, `87` MCP tools, `26` engines, Atlas Local default `27017`, explicit RBAC caveat)
+- [x] External access-control reports saved at:
+  - `/Users/rom.iluz/Dev/mongobranch-production-lab/reports/access-provision-report.json`
+  - `/Users/rom.iluz/Dev/mongobranch-production-lab/reports/access-list-report.json`
+  - `/Users/rom.iluz/Dev/mongobranch-production-lab/reports/access-revoke-report.json`
+- [x] Protected deploy approvals now use a change-stream drift gate based on approval `operationTime`
+- [x] External drift-gate proof saved at `/Users/rom.iluz/Dev/mongobranch-production-lab/reports/drift-gate-report.json`
+- [x] `main` now participates in commit ancestry through bootstrap history
+- [x] Deploy requests now use three-way merge and block stale conflicting execution
+- [x] Merge flows record target-side merge commits so ancestry remains usable after merges
+- [x] Hardened protected-branch proxy regression coverage so `ProtectionManager` deny decisions are proven to block all proxied write operations without data mutation or oplog writes
+- [x] Full repo verification passes: `bun run lint`, `bun run test` (**340/340** tests)
+- [x] Research-backed blocker plan completed across official MongoDB docs, versioning papers, competitor docs, and GitHub implementations
+- [~] Next hardening wave — direct-write bypass mitigation:
+  - [x] create per-branch users + custom roles instead of sharing one broad connection string
+  - [x] expose deploy-identity provisioning and live RBAC enforcement checks
+  - [ ] require MongoDB access control in any "enforced" production profile
+  - [ ] reserve protected-target writes for a MongoBranch deploy service identity during actual merge execution
+  - [ ] optionally add short `setUserWriteBlockMode` cutover windows around protected deploy apply
+- [ ] Next hardening wave — durable conflict inbox:
+  - persist unresolved conflicts as first-class metadata collections
+  - store `base`, `ours`, `theirs`, conflict IDs, and constraint violations
+  - let MCP/CLI query and resolve conflicts incrementally instead of returning transient arrays only
+- [ ] Next hardening wave — search readiness contract:
+  - create/list/wait/query/drop canary per environment
+  - persist `status`, `queryable`, and `latestDefinitionVersion`
+  - block search-index automation unless the canary round-trip proves the environment healthy
+- [ ] Next hardening wave — benchmark harness:
+  - adopt YCSB-style standard workloads plus MongoBranch-specific workflows
+  - collect command monitoring + `serverStatus()` telemetry
+  - publish branch-create / merge / deploy / drift-check / time-travel latency and throughput envelopes
+- [ ] Next hardening wave — backup/restore and observability:
+  - script `mongodump --oplog` / `mongorestore --oplogReplay` drills for Atlas Local
+  - add supported command-monitoring / profiler / Prometheus / OpenTelemetry runbooks
+- [ ] Operational sign-off still pending:
+  - direct-write bypass mitigation/detection
+  - target-environment search-index validation
+  - performance/load benchmark wave
+  - backup/restore and observability rollout package

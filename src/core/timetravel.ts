@@ -59,22 +59,15 @@ export class TimeTravelEngine {
       const docs = await db.collection(coll.name).find({}).toArray();
       if (docs.length === 0) continue;
 
-      // Serialize ObjectIds to strings for clean storage
-      const cleanDocs = docs.map(d => {
-        const clean = { ...d };
-        if (clean._id) clean._id = clean._id.toString() as any;
-        return clean;
-      });
-
       await this.commitData.insertOne({
         commitHash,
         collection: coll.name,
-        documents: cleanDocs,
-        documentCount: cleanDocs.length,
+        documents: docs as Record<string, unknown>[],
+        documentCount: docs.length,
         storedAt: new Date(),
       });
 
-      totalDocs += cleanDocs.length;
+      totalDocs += docs.length;
     }
 
     return totalDocs;
@@ -201,7 +194,13 @@ export class TimeTravelEngine {
 
     // For fields that were never changed (set at creation), attribute to first commit
     if (previousDoc) {
-      const firstCommitWithDoc = await this.findCreationCommit(commitChain, previousDoc, collection, documentId);
+      const firstCommitWithDoc = await this.findCreationCommit(
+        branchName,
+        commitChain,
+        previousDoc,
+        collection,
+        documentId
+      );
       if (firstCommitWithDoc) {
         for (const key of Object.keys(previousDoc)) {
           if (key === "_id") continue;
@@ -231,11 +230,28 @@ export class TimeTravelEngine {
   // ── Private Helpers ──────────────────────────────────────
 
   private async findCreationCommit(
+    branchName: string,
     chain: Commit[],
     doc: Record<string, unknown>,
     collection: string,
     documentId: string,
   ): Promise<Commit | null> {
+    const branchLocalChain = chain.filter((commit) => commit.branchName === branchName);
+
+    for (let i = branchLocalChain.length - 1; i >= 0; i--) {
+      const commit = branchLocalChain[i];
+      const snapshot = await this.commitData.findOne({
+        commitHash: commit!.hash,
+        collection,
+      });
+      if (snapshot) {
+        const found = snapshot.documents.find(
+          (d: Record<string, unknown>) => String((d as any)._id) === String(documentId)
+        );
+        if (found) return commit ?? null;
+      }
+    }
+
     // Walk from oldest to newest, find the first commit that contains the doc
     for (let i = chain.length - 1; i >= 0; i--) {
       const commit = chain[i];

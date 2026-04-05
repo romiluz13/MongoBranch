@@ -16,11 +16,11 @@
 set -e
 cd "$(dirname "$0")"
 
-# Auto-detect Atlas Local port (27018 from docker compose, 27017 from standalone)
-if mongosh "mongodb://localhost:27018/?directConnection=true" --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
-  PORT=27018
-elif mongosh "mongodb://localhost:27017/?directConnection=true" --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
+# Auto-detect Atlas Local port (27017 default, 27018 legacy/custom fallback)
+if mongosh "mongodb://localhost:27017/?directConnection=true" --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
   PORT=27017
+elif mongosh "mongodb://localhost:27018/?directConnection=true" --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
+  PORT=27018
 else
   echo "❌ No MongoDB found on port 27017 or 27018."
   echo "   Run: docker compose up -d"

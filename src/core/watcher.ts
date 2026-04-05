@@ -5,7 +5,7 @@
  * deletes, and collection-level events. Emits typed events to registered handlers.
  */
 
-import type { MongoClient, ChangeStream, ChangeStreamDocument, ResumeToken } from "mongodb";
+import type { MongoClient, ChangeStream, ChangeStreamDocument, ResumeToken, Timestamp } from "mongodb";
 import type { MongoBranchConfig, BranchMetadata } from "./types";
 import { META_COLLECTION, MAIN_BRANCH } from "./types";
 
@@ -26,6 +26,52 @@ export interface BranchChangeEvent {
 }
 
 export type BranchChangeHandler = (event: BranchChangeEvent) => void | Promise<void>;
+
+export async function resolveWatchedDatabaseName(
+  client: MongoClient,
+  config: MongoBranchConfig,
+  branchName: string,
+): Promise<string> {
+  if (branchName === MAIN_BRANCH) {
+    return config.sourceDatabase;
+  }
+
+  const meta = await client
+    .db(config.metaDatabase)
+    .collection<BranchMetadata>(META_COLLECTION)
+    .findOne({ name: branchName, status: { $ne: "deleted" } });
+  if (!meta?.branchDatabase) {
+    throw new Error(`Branch "${branchName}" not found`);
+  }
+  return meta.branchDatabase;
+}
+
+export async function captureOperationTime(
+  client: MongoClient,
+): Promise<Timestamp | null> {
+  const hello = await client.db("admin").command({ hello: 1 });
+  return hello.operationTime ?? hello.$clusterTime?.clusterTime ?? null;
+}
+
+export async function hasBranchChangesSince(
+  client: MongoClient,
+  config: MongoBranchConfig,
+  branchName: string,
+  operationTime: Timestamp,
+): Promise<boolean> {
+  const dbName = await resolveWatchedDatabaseName(client, config, branchName);
+  const changeStream = client.db(dbName).watch([], {
+    startAtOperationTime: operationTime,
+    maxAwaitTimeMS: 500,
+  });
+
+  try {
+    const change = await changeStream.tryNext();
+    return change !== null;
+  } finally {
+    await changeStream.close().catch(() => {});
+  }
+}
 
 export class BranchWatcher {
   private client: MongoClient;
@@ -58,15 +104,7 @@ export class BranchWatcher {
       throw new Error(`Watcher already running on branch "${this.branchName}"`);
     }
 
-    const metaDb = this.client.db(this.config.metaDatabase);
-    const meta = await metaDb
-      .collection<BranchMetadata>(META_COLLECTION)
-      .findOne({ name: branchName, status: { $ne: "deleted" } });
-
-    const dbName = branchName === MAIN_BRANCH
-      ? this.config.sourceDatabase
-      : meta?.branchDatabase;
-    if (!dbName) throw new Error(`Branch "${branchName}" not found`);
+    const dbName = await resolveWatchedDatabaseName(this.client, this.config, branchName);
 
     this.branchName = branchName;
     this.running = true;
@@ -78,12 +116,13 @@ export class BranchWatcher {
     if (options?.resumeAfter) watchOpts.resumeAfter = options.resumeAfter;
 
     const db = this.client.db(dbName);
-    this.changeStream = db.watch([], watchOpts);
+    const changeStream = db.watch([], watchOpts);
+    this.changeStream = changeStream;
 
     (async () => {
       try {
-        for await (const change of this.changeStream as AsyncIterable<ChangeStreamDocument>) {
-          if (!this.running) break;
+        for await (const change of changeStream as AsyncIterable<ChangeStreamDocument>) {
+          if (!this.running || this.changeStream !== changeStream) break;
           const event = this.mapEvent(change, branchName, dbName);
           if (!event) continue;
           this.lastResumeToken = event.resumeToken;
@@ -95,17 +134,24 @@ export class BranchWatcher {
           }
         }
       } catch (err) {
-        console.warn(`[BranchWatcher] change stream error:`, err instanceof Error ? err.message : err);
+        if (this.running && this.changeStream === changeStream) {
+          console.warn(`[BranchWatcher] change stream error:`, err instanceof Error ? err.message : err);
+        }
         this.running = false;
+      } finally {
+        if (this.changeStream === changeStream && !this.running) {
+          this.changeStream = null;
+        }
       }
     })();
   }
 
   async stop(): Promise<void> {
     this.running = false;
-    if (this.changeStream) {
-      await this.changeStream.close();
-      this.changeStream = null;
+    const changeStream = this.changeStream;
+    this.changeStream = null;
+    if (changeStream) {
+      await changeStream.close();
     }
   }
 

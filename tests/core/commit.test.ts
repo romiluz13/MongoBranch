@@ -55,8 +55,8 @@ beforeEach(async () => {
 });
 
 describe("CommitEngine.commit", () => {
-  it("creates a root commit with no parents on a new branch", async () => {
-    await branchManager.createBranch({ name: "feat-commit" });
+  it("creates the first branch commit on top of the bootstrapped main baseline", async () => {
+    const branch = await branchManager.createBranch({ name: "feat-commit" });
 
     const commit = await commitEngine.commit({
       branchName: "feat-commit",
@@ -66,7 +66,7 @@ describe("CommitEngine.commit", () => {
 
     expect(commit.hash).toBeDefined();
     expect(commit.hash).toHaveLength(64); // SHA-256
-    expect(commit.parentHashes).toEqual([]); // Root commit
+    expect(commit.parentHashes).toEqual([branch.headCommit!]);
     expect(commit.branchName).toBe("feat-commit");
     expect(commit.message).toBe("Initial commit");
     expect(commit.author).toBe("test-agent");
@@ -157,16 +157,18 @@ describe("CommitEngine.getLog", () => {
     await commitEngine.commit({ branchName: "feat-log", message: "Commit 3" });
 
     const log = await commitEngine.getLog("feat-log");
-    expect(log.commits).toHaveLength(3);
+    expect(log.commits).toHaveLength(4);
     expect(log.commits[0]!.message).toBe("Commit 3"); // Most recent first
     expect(log.commits[1]!.message).toBe("Commit 2");
     expect(log.commits[2]!.message).toBe("Commit 1");
+    expect(log.commits[3]!.message).toBe("chore: bootstrap main history");
   });
 
   it("returns empty log for branch with no commits", async () => {
     await branchManager.createBranch({ name: "feat-empty" });
     const log = await commitEngine.getLog("feat-empty");
-    expect(log.commits).toHaveLength(0);
+    expect(log.commits).toHaveLength(1);
+    expect(log.commits[0]!.message).toBe("chore: bootstrap main history");
   });
 
   it("respects limit parameter", async () => {
@@ -214,11 +216,49 @@ describe("CommitEngine.getCommonAncestor", () => {
     await branchManager.createBranch({ name: "island-a" });
     await branchManager.createBranch({ name: "island-b" });
 
-    await commitEngine.commit({ branchName: "island-a", message: "A alone" });
-    await commitEngine.commit({ branchName: "island-b", message: "B alone" });
+    await commitEngine.commit({
+      branchName: "island-a",
+      message: "A alone",
+      parentOverrides: [],
+    });
+    await commitEngine.commit({
+      branchName: "island-b",
+      message: "B alone",
+      parentOverrides: [],
+    });
 
     const ancestor = await commitEngine.getCommonAncestor("island-a", "island-b");
     expect(ancestor).toBeNull();
+  });
+});
+
+describe("CommitEngine — branch ancestry wiring", () => {
+  it("bootstraps main history when creating the first branch from main", async () => {
+    const created = await branchManager.createBranch({ name: "main-derived" });
+    const mainLog = await commitEngine.getLog("main");
+
+    expect(mainLog.commits).toHaveLength(1);
+    expect(mainLog.commits[0]!.message).toBe("chore: bootstrap main history");
+    expect(created.headCommit).toBe(mainLog.commits[0]!.hash);
+  });
+
+  it("inherits the parent head commit when creating a child branch", async () => {
+    await branchManager.createBranch({ name: "parent-head" });
+    const base = await commitEngine.commit({
+      branchName: "parent-head",
+      message: "Parent base",
+    });
+
+    await branchManager.createBranch({ name: "child-head", from: "parent-head" });
+    const child = await branchManager.getBranch("child-head");
+    expect(child).not.toBeNull();
+    expect(child!.headCommit).toBe(base.hash);
+
+    const childCommit = await commitEngine.commit({
+      branchName: "child-head",
+      message: "Child change",
+    });
+    expect(childCommit.parentHashes).toEqual([base.hash]);
   });
 });
 
@@ -231,7 +271,7 @@ describe("CommitEngine.getCommitCount", () => {
     await commitEngine.commit({ branchName: "feat-count", message: "Three" });
 
     const count = await commitEngine.getCommitCount("feat-count");
-    expect(count).toBe(3);
+    expect(count).toBe(4);
   });
 });
 
@@ -436,6 +476,56 @@ describe("CommitEngine.cherryPick", () => {
       commitEngine.cherryPick("cp-err", "deadbeef".repeat(8))
     ).rejects.toThrow(/not found/);
   });
+
+  it("replays content-only document updates onto the target branch", async () => {
+    await branchManager.createBranch({ name: "cp-content-src" });
+    await branchManager.createBranch({ name: "cp-content-tgt" });
+
+    await commitEngine.commit({ branchName: "cp-content-src", message: "Base" });
+    await commitEngine.commit({ branchName: "cp-content-tgt", message: "Target base" });
+
+    const sourceDb = client.db("__mb_cp-content-src");
+    await sourceDb.collection("users").updateOne(
+      { name: "Alice Chen" },
+      { $set: { salary: 150000 } }
+    );
+    const changeCommit = await commitEngine.commit({
+      branchName: "cp-content-src",
+      message: "Raise Alice salary",
+    });
+
+    await commitEngine.cherryPick("cp-content-tgt", changeCommit.hash, "picker");
+
+    const targetDb = client.db("__mb_cp-content-tgt");
+    const alice = await targetDb.collection("users").findOne({ name: "Alice Chen" });
+    expect(alice).not.toBeNull();
+    expect(alice!.salary).toBe(150000);
+  });
+
+  it("captures the cherry-picked state in the new commit snapshot", async () => {
+    await branchManager.createBranch({ name: "cp-snap-src" });
+    await branchManager.createBranch({ name: "cp-snap-tgt" });
+
+    await commitEngine.commit({ branchName: "cp-snap-src", message: "Base" });
+    await commitEngine.commit({ branchName: "cp-snap-tgt", message: "Target base" });
+
+    const sourceDb = client.db("__mb_cp-snap-src");
+    await sourceDb.collection("users").updateOne(
+      { name: "Alice Chen" },
+      { $set: { salary: 155000 } }
+    );
+    const changeCommit = await commitEngine.commit({
+      branchName: "cp-snap-src",
+      message: "Raise Alice salary again",
+    });
+
+    const result = await commitEngine.cherryPick("cp-snap-tgt", changeCommit.hash, "picker");
+    const snapshot = await commitEngine.getCommitDocuments(result.newCommitHash);
+    const alice = snapshot.users?.find((doc) => doc.name === "Alice Chen");
+
+    expect(alice).toBeDefined();
+    expect(alice!.salary).toBe(155000);
+  });
 });
 
 // ── Revert Tests ───────────────────────────────────────────
@@ -479,5 +569,48 @@ describe("CommitEngine.revert", () => {
     await expect(
       commitEngine.revert("rev-err", "deadbeef".repeat(8))
     ).rejects.toThrow(/not found/);
+  });
+
+  it("restores content for reverted field-only changes", async () => {
+    await branchManager.createBranch({ name: "rev-content" });
+    await commitEngine.commit({ branchName: "rev-content", message: "Base" });
+
+    const db = client.db("__mb_rev-content");
+    await db.collection("users").updateOne(
+      { name: "Bob Martinez" },
+      { $set: { salary: 125000 } }
+    );
+    const badCommit = await commitEngine.commit({
+      branchName: "rev-content",
+      message: "Bad salary edit",
+    });
+
+    await commitEngine.revert("rev-content", badCommit.hash, "reverter");
+
+    const bob = await db.collection("users").findOne({ name: "Bob Martinez" });
+    expect(bob).not.toBeNull();
+    expect(bob!.salary).toBe(120000);
+  });
+
+  it("captures the reverted state in the new commit snapshot", async () => {
+    await branchManager.createBranch({ name: "rev-snap" });
+    await commitEngine.commit({ branchName: "rev-snap", message: "Base" });
+
+    const db = client.db("__mb_rev-snap");
+    await db.collection("users").updateOne(
+      { name: "Bob Martinez" },
+      { $set: { salary: 130000 } }
+    );
+    const badCommit = await commitEngine.commit({
+      branchName: "rev-snap",
+      message: "Bad salary raise",
+    });
+
+    const result = await commitEngine.revert("rev-snap", badCommit.hash, "reverter");
+    const snapshot = await commitEngine.getCommitDocuments(result.newCommitHash);
+    const bob = snapshot.users?.find((doc) => doc.name === "Bob Martinez");
+
+    expect(bob).toBeDefined();
+    expect(bob!.salary).toBe(120000);
   });
 });

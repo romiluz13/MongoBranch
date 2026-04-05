@@ -28,7 +28,10 @@ import { AuditChainManager } from "../core/audit-chain.ts";
 import { CheckpointManager } from "../core/checkpoint.ts";
 import { ExecutionGuard } from "../core/execution-guard.ts";
 import { BranchWatcher, type BranchChangeEvent } from "../core/watcher.ts";
-import type { MongoBranchConfig, AuditEntryType } from "../core/types.ts";
+import { EnvironmentDoctor } from "../core/doctor.ts";
+import { DriftManager } from "../core/drift.ts";
+import { AccessControlManager } from "../core/access-control.ts";
+import type { MongoBranchConfig, AuditEntryType, DriftBaselineStatus } from "../core/types.ts";
 
 interface McpToolResult {
   [key: string]: unknown;
@@ -71,6 +74,9 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
   const auditChain = new AuditChainManager(client, config);
   const checkpointManager = new CheckpointManager(client, config, commitEngine, branchManager);
   const executionGuard = new ExecutionGuard(client, config);
+  const environmentDoctor = new EnvironmentDoctor(client, config);
+  const driftManager = new DriftManager(client, config);
+  const accessControlManager = new AccessControlManager(client, config);
   const activeWatchers = new Map<string, { watcher: BranchWatcher; events: BranchChangeEvent[] }>();
 
   // Fire-and-forget audit chain append — never blocks the operation
@@ -100,6 +106,8 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
       await auditChain.initialize();
       await checkpointManager.initialize();
       await executionGuard.initialize();
+      await driftManager.initialize();
+      await accessControlManager.initialize();
       initialized = true;
     }
   }
@@ -172,6 +180,184 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         return errorResult(`Failed to get system status: ${msg}`);
+      }
+    },
+
+    /**
+     * environment_doctor — Probe live MongoDB capabilities used by MongoBranch.
+     */
+    async environment_doctor(args: {
+      timeoutMs?: number;
+      includeSearch?: boolean;
+      includeVectorSearch?: boolean;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const report = await environmentDoctor.run({
+          timeoutMs: args.timeoutMs,
+          includeSearch: args.includeSearch,
+          includeVectorSearch: args.includeVectorSearch,
+        });
+        return textResult(JSON.stringify(report, null, 2));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to run environment doctor: ${msg}`);
+      }
+    },
+
+    /**
+     * access_control_status — Inspect current auth context and probe live enforcement.
+     */
+    async access_control_status(args: {
+      probeEnforcement?: boolean;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const status = await accessControlManager.getStatus({
+          probeEnforcement: args.probeEnforcement !== false,
+        });
+        return textResult(JSON.stringify(status, null, 2));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to inspect access control status: ${msg}`);
+      }
+    },
+
+    /**
+     * provision_branch_access — Create a branch-scoped MongoDB user and role.
+     */
+    async provision_branch_access(args: {
+      branchName: string;
+      username: string;
+      password: string;
+      collections?: string[];
+      readOnly?: boolean;
+      includeSearchIndexes?: boolean;
+      createdBy: string;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const result = await accessControlManager.provisionBranchAccess(args);
+        return textResult(JSON.stringify(result, null, 2));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to provision branch access: ${msg}`);
+      }
+    },
+
+    /**
+     * provision_deployer_access — Create a protected-target deploy identity.
+     */
+    async provision_deployer_access(args: {
+      username: string;
+      password: string;
+      targetBranch?: string;
+      includeSearchIndexes?: boolean;
+      allowWriteBlockBypass?: boolean;
+      createdBy: string;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const result = await accessControlManager.provisionDeployerAccess(args);
+        return textResult(JSON.stringify(result, null, 2));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to provision deploy access: ${msg}`);
+      }
+    },
+
+    /**
+     * revoke_access_identity — Drop a provisioned MongoDB user and role.
+     */
+    async revoke_access_identity(args: {
+      username: string;
+      revokedBy: string;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const result = await accessControlManager.revoke(args.username, args.revokedBy);
+        return textResult(JSON.stringify({ profile: result }, null, 2));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to revoke access identity: ${msg}`);
+      }
+    },
+
+    /**
+     * list_access_profiles — List MongoBranch-managed access identities.
+     */
+    async list_access_profiles(): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const profiles = await accessControlManager.listProfiles();
+        return textResult(JSON.stringify({ profiles }, null, 2));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to list access profiles: ${msg}`);
+      }
+    },
+
+    /**
+     * capture_branch_drift_baseline — Capture a branch freshness baseline.
+     */
+    async capture_branch_drift_baseline(args: {
+      branchName: string;
+      capturedBy?: string;
+      reason?: string;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const baseline = await driftManager.captureBaseline({
+          branchName: args.branchName,
+          capturedBy: args.capturedBy,
+          reason: args.reason,
+        });
+        return textResult(JSON.stringify(baseline, null, 2));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to capture drift baseline: ${msg}`);
+      }
+    },
+
+    /**
+     * check_branch_drift — Check whether a branch changed since a baseline.
+     */
+    async check_branch_drift(args: {
+      baselineId?: string;
+      branchName?: string;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const result = await driftManager.checkBaseline({
+          baselineId: args.baselineId,
+          branchName: args.branchName,
+        });
+        return textResult(JSON.stringify(result, null, 2));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to check branch drift: ${msg}`);
+      }
+    },
+
+    /**
+     * list_branch_drift_baselines — List captured branch freshness baselines.
+     */
+    async list_branch_drift_baselines(args: {
+      branchName?: string;
+      status?: DriftBaselineStatus;
+      limit?: number;
+    }): Promise<McpToolResult> {
+      try {
+        await ensureInit();
+        const baselines = await driftManager.listBaselines({
+          branchName: args.branchName,
+          status: args.status,
+          limit: args.limit,
+        });
+        return textResult(JSON.stringify({ baselines }, null, 2));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return errorResult(`Failed to list drift baselines: ${msg}`);
       }
     },
 
@@ -639,12 +825,13 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
       branchName: string;
       collection: string;
       document: Record<string, unknown>;
+      agentId?: string;
       performedBy?: string;
     }): Promise<McpToolResult> {
       try {
         await ensureInit();
         const result = await proxy.insertOne(
-          args.branchName, args.collection, args.document, args.performedBy
+          args.branchName, args.collection, args.document, args.agentId ?? args.performedBy
         );
         return textResult(`Inserted document ${result.insertedId} into ${args.collection}`);
       } catch (err: unknown) {
@@ -661,12 +848,13 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
       collection: string;
       filter: Record<string, unknown>;
       update: Record<string, unknown>;
+      agentId?: string;
       performedBy?: string;
     }): Promise<McpToolResult> {
       try {
         await ensureInit();
         const result = await proxy.updateOne(
-          args.branchName, args.collection, args.filter, args.update, args.performedBy
+          args.branchName, args.collection, args.filter, args.update, args.agentId ?? args.performedBy
         );
         return textResult(
           `Updated ${result.modifiedCount} of ${result.matchedCount} matched documents`
@@ -684,12 +872,13 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
       branchName: string;
       collection: string;
       filter: Record<string, unknown>;
+      agentId?: string;
       performedBy?: string;
     }): Promise<McpToolResult> {
       try {
         await ensureInit();
         const result = await proxy.deleteOne(
-          args.branchName, args.collection, args.filter, args.performedBy
+          args.branchName, args.collection, args.filter, args.agentId ?? args.performedBy
         );
         return textResult(`Deleted ${result.deletedCount} document(s)`);
       } catch (err: unknown) {
@@ -779,12 +968,13 @@ export function createMongoBranchTools(client: MongoClient, config: MongoBranchC
       collection: string;
       filter: Record<string, unknown>;
       update: Record<string, unknown>;
+      agentId?: string;
       performedBy?: string;
     }): Promise<McpToolResult> {
       try {
         await ensureInit();
         const result = await proxy.updateMany(
-          args.branchName, args.collection, args.filter, args.update, args.performedBy
+          args.branchName, args.collection, args.filter, args.update, args.agentId ?? args.performedBy
         );
         return textResult(
           `Updated ${result.modifiedCount} of ${result.matchedCount} matched documents`

@@ -44,6 +44,7 @@ At the END of every prompt, BEFORE responding to the user:
 - When you need MongoDB API details, check `docs/mongodb/` FIRST
 - If docs are insufficient, fetch from official MongoDB web docs and UPDATE local docs
 - Never invent MongoDB API behavior — always verify against docs
+- Public docs (`README.md`, `landing/index.html`, readiness docs) must match the latest verified evidence and caveats — do not leave stale counts or stronger claims than what external dogfood has proven
 
 ### 3. Research Protocol
 - Use web search for latest MongoDB features, competitor moves, ecosystem changes
@@ -75,6 +76,7 @@ At the END of every prompt, BEFORE responding to the user:
 | File | Purpose |
 |------|---------|
 | `plan/roadmap.md` | Master roadmap — 4 waves, all phases and tasks |
+| `plan/production-readiness.md` | Production-readiness definition, evidence, checklist, and remaining operational gaps |
 
 ### 📚 MongoDB Documentation
 | File | Purpose |
@@ -87,9 +89,11 @@ At the END of every prompt, BEFORE responding to the user:
 | `docs/mongodb/schema-validation/schema-validation.md` | JSON Schema, validation levels |
 | `docs/mongodb/views-collections/views-and-collections.md` | Views, capped, namespaces |
 | `docs/mongodb/commands/admin-commands.md` | listDatabases, collMod, rename |
+| `docs/mongodb/security/access-control.md` | RBAC, users, roles, privilege actions, enforcement probe |
 | `docs/mongodb/replication/replication.md` | Oplog, replica sets, read/write concerns |
 | `docs/mongodb/driver-nodejs/driver-api.md` | Node.js driver classes and methods |
 | `docs/mongodb/atlas-cli/atlas-cli.md` | Atlas CLI commands, local dev, plugins |
+| `docs/mongodb/connection/best-practices.md` | Driver connection options, pool settings, retry semantics |
 | `docs/mongodb/ai/automated-embeddings.md` | AutoEmbed index, Voyage AI, vectorSearch |
 | `docs/mongodb/ai/hybrid-search.md` | $rankFusion, $scoreFusion, hybrid search |
 
@@ -140,11 +144,23 @@ At the END of every prompt, BEFORE responding to the user:
 | `src/core/anonymize.ts` | AnonymizeEngine class — hash/mask/null/redact PII strategies |
 | `src/core/reflog.ts` | ReflogManager class — branch pointer tracking, survives deletion |
 | `src/core/search-index.ts` | SearchIndexManager class — Atlas Search index branching, list/copy/diff/merge |
+| `src/core/access-control.ts` | AccessControlManager class — branch/deployer users + roles, RBAC enforcement probe |
+| `src/core/audit-chain.ts` | AuditChainManager class — tamper-evident hash-chain audit log |
+| `src/core/checkpoint.ts` | CheckpointManager class — lightweight save/restore points |
+| `src/core/execution-guard.ts` | ExecutionGuard class — idempotent requestId dedup for agent ops |
+| `src/core/watcher.ts` | BranchWatcher helpers — live change-stream watch + drift checks |
+| `src/core/drift.ts` | DriftManager class — capture/check/list branch freshness baselines via `operationTime` + change streams |
+| `src/core/doctor.ts` | EnvironmentDoctor class — live Atlas Local capability probes for transactions, change streams, pre-images, search, and vector search |
 | `src/core/types.ts` | TypeScript types, interfaces, config, constants |
 | `src/cli.ts` | Commander.js CLI entry point (`mb branch`, `mb commit` commands) |
 | `src/mcp/server.ts` | MCP Server — stdio transport, tool registration |
 | `src/mcp/tools.ts` | MCP tool handlers — create/list/diff/merge wired to engines |
 | `src/mcp/mongobranch.agent.md` | Agent skill file — teaches AI agents to use MongoBranch |
+
+### 🔬 Verification
+| File | Purpose |
+|------|---------|
+| `scripts/realworld-10turn.ts` | Standalone 10-turn real-world stress scenario — validates branch, merge, audit, reflog, checkpoint, scope, and lazy-read behavior outside Vitest |
 
 ### 🧪 Tests (TDD, real MongoDB, zero mocks)
 | File | Purpose |
@@ -174,7 +190,16 @@ At the END of every prompt, BEFORE responding to the user:
 | `tests/core/anonymize.test.ts` | Anonymization — hash/mask/null/redact strategies |
 | `tests/core/reflog.test.ts` | Reflog — record/query, survives deletion, action filter |
 | `tests/core/search-index.test.ts` | Search indexes — list/copy/diff/merge on branches |
-| `tests/core/e2e-realistic.test.ts` | Full E2E: 3 agents, 13 phases, scoping→branch→CRUD→diff→merge→audit→gc |
+| `tests/core/access-control.test.ts` | Access control — branch/deployer identities, RBAC status probe, revoke |
+| `tests/core/audit-chain.test.ts` | Audit chain — hash linkage, verification, certified export |
+| `tests/core/checkpoint.test.ts` | Checkpoints — create/list/restore branch save points |
+| `tests/core/e2e-realistic.test.ts` | End-to-end realistic branch workflows against real MongoDB |
+| `tests/core/execution-guard.test.ts` | Execution guard — requestId dedup, retry safety |
+| `tests/core/drift.test.ts` | Drift baselines — capture/check/list, stale-state detection on main and branch DBs |
+| `tests/core/doctor.test.ts` | Environment doctor — live MongoDB / Atlas Local capability probes |
+| `tests/core/nested-branch.test.ts` | Nested branch behavior — inheritance, ancestry, lifecycle |
+| `tests/core/webhook.test.ts` | Webhooks — HMAC-signed hook delivery and validation |
+| `tests/mcp/integration.test.ts` | MCP integration — higher-level tool flows against real MongoDB |
 | `tests/mcp/server.test.ts` | MCP tools — create/list/diff/merge via tool handlers |
 
 ### 🐳 Infrastructure

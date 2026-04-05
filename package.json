@@ -1,6 +1,6 @@
 {
   "name": "mongobranch",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Git-like branching, diffing, and merging for MongoDB data — built for AI agents",
   "module": "src/cli.ts",
   "type": "module",
@@ -34,11 +34,13 @@
     "./checkpoint": "./src/core/checkpoint.ts",
     "./execution-guard": "./src/core/execution-guard.ts",
     "./watcher": "./src/core/watcher.ts",
+    "./drift": "./src/core/drift.ts",
+    "./doctor": "./src/core/doctor.ts",
+    "./access-control": "./src/core/access-control.ts",
     "./mcp/tools": "./src/mcp/tools.ts",
     "./mcp/server": "./src/mcp/server.ts"
   },
   "engines": {
-    "node": ">=18",
     "bun": ">=1.0"
   },
   "scripts": {

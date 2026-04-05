@@ -6,16 +6,20 @@
  */
 import type { MongoClient, Db, Document, Filter, UpdateFilter, OptionalUnlessRequiredId } from "mongodb";
 import { ObjectId } from "mongodb";
-import type { MongoBranchConfig, BranchMetadata } from "./types.ts";
+import type { MongoBranchConfig, BranchMetadata, ScopePermission } from "./types.ts";
 import { META_COLLECTION, MAIN_BRANCH } from "./types.ts";
 import { BranchManager } from "./branch.ts";
 import { OperationLog } from "./oplog.ts";
+import { ProtectionManager } from "./protection.ts";
+import { ScopeManager } from "./scope.ts";
 
 export class BranchProxy {
   private client: MongoClient;
   private config: MongoBranchConfig;
   private branchManager: BranchManager;
   private oplog: OperationLog;
+  private protectionManager: ProtectionManager;
+  private scopeManager: ScopeManager;
 
   constructor(
     client: MongoClient,
@@ -27,6 +31,8 @@ export class BranchProxy {
     this.config = config;
     this.branchManager = branchManager;
     this.oplog = oplog;
+    this.protectionManager = new ProtectionManager(client, config);
+    this.scopeManager = new ScopeManager(client, config);
   }
 
   /**
@@ -39,6 +45,7 @@ export class BranchProxy {
     doc: Record<string, unknown>,
     performedBy?: string
   ): Promise<{ insertedId: string }> {
+    await this.assertWriteAllowed(branchName, collection, performedBy, "write");
     await this.ensureMaterialized(branchName, collection);
     const db = await this.resolveBranchDb(branchName);
 
@@ -68,6 +75,7 @@ export class BranchProxy {
     update: Record<string, unknown>,
     performedBy?: string
   ): Promise<{ matchedCount: number; modifiedCount: number }> {
+    await this.assertWriteAllowed(branchName, collection, performedBy, "write");
     await this.ensureMaterialized(branchName, collection);
     const db = await this.resolveBranchDb(branchName);
     const coll = db.collection(collection);
@@ -107,6 +115,7 @@ export class BranchProxy {
     filter: Record<string, unknown>,
     performedBy?: string
   ): Promise<{ deletedCount: number }> {
+    await this.assertWriteAllowed(branchName, collection, performedBy, "delete");
     await this.ensureMaterialized(branchName, collection);
     const db = await this.resolveBranchDb(branchName);
     const coll = db.collection(collection);
@@ -188,29 +197,22 @@ export class BranchProxy {
     if (!meta) throw new Error(`Branch "${branchName}" not found`);
 
     if (meta.lazy) {
-      // For lazy branches: merge parent collections + materialized collections
-      const sourceDb = this.client.db(this.config.sourceDatabase);
-      const sourceCols = await sourceDb.listCollections().toArray();
-
+      // For lazy branches: merge parent-visible collections + materialized collections.
+      // Nested lazy branches must inherit the parent's visible state, not always root main.
+      const parentCols = meta.parentBranch && meta.parentBranch !== MAIN_BRANCH
+        ? await this.listCollections(meta.parentBranch)
+        : await this.listDbCollections(this.client.db(this.config.sourceDatabase));
       const branchDb = this.client.db(meta.branchDatabase);
-      const branchCols = await branchDb.listCollections().toArray();
+      const branchCols = await this.listDbCollections(branchDb);
 
-      // Merge: branch collections override source collections
+      // Merge: branch collections override parent-visible collections
       const colMap = new Map<string, string>();
-      for (const c of sourceCols) {
-        if (c.name !== META_COLLECTION) colMap.set(c.name, c.type ?? "collection");
-      }
-      for (const c of branchCols) {
-        if (c.name !== META_COLLECTION) colMap.set(c.name, c.type ?? "collection");
-      }
+      for (const c of parentCols) colMap.set(c.name, c.type);
+      for (const c of branchCols) colMap.set(c.name, c.type);
       return Array.from(colMap.entries()).map(([name, type]) => ({ name, type }));
     }
 
-    const db = this.client.db(meta.branchDatabase);
-    const cols = await db.listCollections().toArray();
-    return cols
-      .filter((c) => c.name !== META_COLLECTION)
-      .map((c) => ({ name: c.name, type: c.type ?? "collection" }));
+    return this.listDbCollections(this.client.db(meta.branchDatabase));
   }
 
   /**
@@ -226,6 +228,7 @@ export class BranchProxy {
     update: Record<string, unknown>,
     performedBy?: string
   ): Promise<{ matchedCount: number; modifiedCount: number }> {
+    await this.assertWriteAllowed(branchName, collection, performedBy, "write");
     await this.ensureMaterialized(branchName, collection);
     const db = await this.resolveBranchDb(branchName);
     const coll = db.collection(collection);
@@ -296,7 +299,6 @@ export class BranchProxy {
   private async ensureMaterialized(branchName: string, collection: string): Promise<void> {
     const meta = await this.getMeta(branchName);
     if (!meta) throw new Error(`Branch "${branchName}" not found`);
-    if (meta.readOnly) throw new Error(`Branch "${branchName}" is read-only`);
 
     if (meta.lazy) {
       await this.branchManager.materializeCollection(branchName, collection);
@@ -323,12 +325,53 @@ export class BranchProxy {
     if (meta.lazy) {
       const materialized = meta.materializedCollections ?? [];
       if (!materialized.includes(collection)) {
-        // Read from source
-        return this.client.db(this.config.sourceDatabase);
+        const parentBranch = meta.parentBranch ?? MAIN_BRANCH;
+        if (parentBranch === MAIN_BRANCH) {
+          return this.client.db(this.config.sourceDatabase);
+        }
+        return this.resolveReadDb(parentBranch, collection);
       }
     }
 
     return this.client.db(meta.branchDatabase);
+  }
+
+  private async assertWriteAllowed(
+    branchName: string,
+    collection: string,
+    performedBy: string | undefined,
+    operation: ScopePermission
+  ): Promise<void> {
+    const meta = await this.getMeta(branchName);
+    if (!meta) throw new Error(`Branch "${branchName}" not found`);
+    if (meta.readOnly) throw new Error(`Branch "${branchName}" is read-only`);
+
+    const protection = await this.protectionManager.checkWritePermission(branchName, false);
+    if (!protection.allowed) {
+      throw new Error(protection.reason ?? `Writes are blocked on "${branchName}"`);
+    }
+
+    if (!performedBy) return;
+
+    const scope = await this.scopeManager.checkPermission(performedBy, collection, operation);
+    if (scope.allowed) return;
+
+    await this.scopeManager.logViolation({
+      agentId: performedBy,
+      branchName,
+      collection,
+      operation,
+      reason: scope.reason ?? "permission denied",
+    }).catch(() => {});
+
+    throw new Error(scope.reason ?? `Agent "${performedBy}" is not allowed to ${operation} ${collection}`);
+  }
+
+  private async listDbCollections(db: Db): Promise<{ name: string; type: string }[]> {
+    const cols = await db.listCollections().toArray();
+    return cols
+      .filter((c) => c.name !== META_COLLECTION)
+      .map((c) => ({ name: c.name, type: c.type ?? "collection" }));
   }
 
   private async getMeta(branchName: string): Promise<BranchMetadata | null> {

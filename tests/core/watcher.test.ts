@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import { MongoClient } from "mongodb";
 import { BranchManager } from "../../src/core/branch";
 import { BranchWatcher, type BranchChangeEvent } from "../../src/core/watcher";
@@ -61,6 +61,18 @@ describe("BranchWatcher", () => {
 
     await watcher.stop();
     expect(watcher.isRunning()).toBe(false);
+  });
+
+  it("should not warn when stop intentionally closes the stream", async () => {
+    watcher = new BranchWatcher(client, config);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await watcher.watch(testBranch);
+    await new Promise((r) => setTimeout(r, 200));
+    await watcher.stop();
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it("should throw if watching while already running", async () => {

@@ -10,12 +10,14 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { MongoClient } from "mongodb";
 import { startMongoDB, stopMongoDB } from "../setup.ts";
 import { BranchManager } from "../../src/core/branch.ts";
+import { CommitEngine } from "../../src/core/commit.ts";
 import { DeployRequestManager } from "../../src/core/deploy.ts";
 import type { MongoBranchConfig } from "../../src/core/types.ts";
 
 let client: MongoClient;
 let branchManager: BranchManager;
 let deployManager: DeployRequestManager;
+let commitEngine: CommitEngine;
 
 const config: MongoBranchConfig = {
   uri: "",
@@ -29,8 +31,10 @@ beforeAll(async () => {
   client = env.client;
   branchManager = new BranchManager(client, config);
   deployManager = new DeployRequestManager(client, config);
+  commitEngine = new CommitEngine(client, config);
   await branchManager.initialize();
   await deployManager.initialize();
+  await commitEngine.initialize();
 }, 30_000);
 
 afterAll(async () => {
@@ -49,14 +53,40 @@ beforeEach(async () => {
   await client.db(config.metaDatabase).collection("branches").deleteMany({});
   await client.db(config.metaDatabase).collection("deploy_requests").deleteMany({});
   await client.db(config.metaDatabase).collection("hooks").deleteMany({});
+  await client.db(config.metaDatabase).collection("commits").deleteMany({});
+  await client.db(config.metaDatabase).collection("commit_data").deleteMany({});
+  await client.db(config.metaDatabase).collection("tags").deleteMany({});
 
-  // Seed source DB
-  const sourceDb = client.db(config.sourceDatabase);
-  await sourceDb.dropDatabase();
-  await sourceDb.collection("users").insertMany([
-    { name: "Alice", role: "admin" },
-    { name: "Bob", role: "user" },
-  ]);
+  // Drop branch databases with retry and clear source collections in place.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const { databases } = await client.db("admin").command({ listDatabases: 1 });
+      for (const db of databases) {
+        if (db.name.startsWith(config.branchPrefix)) {
+          await client.db(db.name).dropDatabase().catch(() => {});
+        }
+      }
+
+      const sourceDb = client.db(config.sourceDatabase);
+      const collections = await sourceDb.listCollections().toArray().catch(() => []);
+      for (const collection of collections) {
+        if (collection.name.startsWith("system.")) continue;
+        await sourceDb.collection(collection.name).deleteMany({});
+      }
+
+      await sourceDb.collection("users").insertMany([
+        { name: "Alice", role: "admin" },
+        { name: "Bob", role: "user" },
+      ]);
+      break;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (attempt === 2 || !message.includes("being dropped")) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+    }
+  }
 });
 
 // ── Deploy Request Tests ──────────────────────────────────
@@ -85,6 +115,22 @@ describe("DeployRequest — open", () => {
     expect(dr.status).toBe("open");
     expect(dr.createdBy).toBe("alice");
     expect(dr.description).toBe("Add Charlie user");
+  });
+
+  it("allows deploy requests that target main", async () => {
+    await branchManager.createBranch({ name: "feature-main" });
+    const branchDb = client.db(`${config.branchPrefix}feature-main`);
+    await branchDb.collection("users").insertOne({ name: "Main Target User", role: "viewer" });
+
+    const dr = await deployManager.open({
+      sourceBranch: "feature-main",
+      targetBranch: "main",
+      description: "Promote to main",
+      createdBy: "alice",
+    });
+
+    expect(dr.targetBranch).toBe("main");
+    expect(dr.status).toBe("open");
   });
 
   it("rejects duplicate open requests for same source→target", async () => {
@@ -137,6 +183,8 @@ describe("DeployRequest — approve & reject", () => {
     const approved = await deployManager.approve(dr.id, "bob");
     expect(approved.status).toBe("approved");
     expect(approved.reviewedBy).toBe("bob");
+    expect(approved.approvalCapturedAt).toBeDefined();
+    expect(approved.approvalOperationTime).toBeDefined();
   });
 
   it("rejects a deploy request with reason", async () => {
@@ -212,6 +260,113 @@ describe("DeployRequest — execute", () => {
     await expect(
       deployManager.execute(dr.id)
     ).rejects.toThrow(/must be approved/);
+  });
+
+  it("blocks stale deploy requests when main has newer conflicting data", async () => {
+    await branchManager.createBranch({ name: "feat-growth" });
+    await branchManager.createBranch({ name: "feat-hotfix" });
+
+    const growthDb = client.db(`${config.branchPrefix}feat-growth`);
+    await growthDb.collection("users").updateOne(
+      { name: "Alice" },
+      { $set: { role: "manager" } }
+    );
+    await commitEngine.commit({
+      branchName: "feat-growth",
+      message: "Growth wants manager role",
+    });
+
+    const hotfixDb = client.db(`${config.branchPrefix}feat-hotfix`);
+    await hotfixDb.collection("users").updateOne(
+      { name: "Alice" },
+      { $set: { role: "owner" } }
+    );
+    await commitEngine.commit({
+      branchName: "feat-hotfix",
+      message: "Hotfix needs owner role",
+    });
+
+    const hotfixDr = await deployManager.open({
+      sourceBranch: "feat-hotfix",
+      targetBranch: "main",
+      description: "Promote owner role hotfix",
+      createdBy: "alice",
+    });
+    await deployManager.approve(hotfixDr.id, "bob");
+    await deployManager.execute(hotfixDr.id);
+
+    const growthDr = await deployManager.open({
+      sourceBranch: "feat-growth",
+      targetBranch: "main",
+      description: "Promote growth role update",
+      createdBy: "alice",
+    });
+    await deployManager.approve(growthDr.id, "bob");
+
+    await expect(deployManager.execute(growthDr.id)).rejects.toThrow(/merge conflicts/i);
+
+    const mainAlice = await client.db(config.sourceDatabase).collection("users").findOne({ name: "Alice" });
+    expect(mainAlice?.role).toBe("owner");
+
+    const persisted = await deployManager.get(growthDr.id);
+    expect(persisted?.status).toBe("approved");
+  });
+
+  it("blocks execution when target branch changes after approval even without a merge conflict", async () => {
+    await branchManager.createBranch({ name: "feat-target-drift" });
+
+    const featureDb = client.db(`${config.branchPrefix}feat-target-drift`);
+    await featureDb.collection("users").insertOne({ name: "Charlie", role: "viewer" });
+
+    const dr = await deployManager.open({
+      sourceBranch: "feat-target-drift",
+      targetBranch: "main",
+      description: "Add Charlie",
+      createdBy: "alice",
+    });
+    await deployManager.approve(dr.id, "bob");
+
+    await client.db(config.sourceDatabase).collection("users").insertOne({
+      name: "Zoe",
+      role: "auditor",
+    });
+
+    await expect(deployManager.execute(dr.id)).rejects.toThrow(/changed since approval/i);
+
+    const persisted = await deployManager.get(dr.id);
+    expect(persisted?.status).toBe("approved");
+    expect(persisted?.approvalInvalidationReason).toMatch(/target branch "main" changed since approval/i);
+
+    const mainUsers = await client.db(config.sourceDatabase).collection("users").find({}).toArray();
+    expect(mainUsers.some((user) => user.name === "Charlie")).toBe(false);
+    expect(mainUsers.some((user) => user.name === "Zoe")).toBe(true);
+  });
+
+  it("blocks execution when source branch changes after approval", async () => {
+    await branchManager.createBranch({ name: "feat-source-drift" });
+
+    const featureDb = client.db(`${config.branchPrefix}feat-source-drift`);
+    await featureDb.collection("users").insertOne({ name: "Charlie", role: "viewer" });
+
+    const dr = await deployManager.open({
+      sourceBranch: "feat-source-drift",
+      targetBranch: "main",
+      description: "Add Charlie safely",
+      createdBy: "alice",
+    });
+    await deployManager.approve(dr.id, "bob");
+
+    await featureDb.collection("users").insertOne({ name: "Dana", role: "operator" });
+
+    await expect(deployManager.execute(dr.id)).rejects.toThrow(/changed since approval/i);
+
+    const persisted = await deployManager.get(dr.id);
+    expect(persisted?.status).toBe("approved");
+    expect(persisted?.approvalInvalidationReason).toMatch(/source branch "feat-source-drift" changed since approval/i);
+
+    const mainUsers = await client.db(config.sourceDatabase).collection("users").find({}).toArray();
+    expect(mainUsers.some((user) => user.name === "Charlie")).toBe(false);
+    expect(mainUsers.some((user) => user.name === "Dana")).toBe(false);
   });
 });
 

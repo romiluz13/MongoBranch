@@ -124,11 +124,12 @@ client.on("connectionCheckOutFailed", (event) => { /* pool exhaustion */ });
 
 ```
 # Default Atlas Local connection (Docker)
-mongodb://localhost:27018/?directConnection=true
+mongodb://localhost:27017/?directConnection=true
 
 # MongoBranch test setup auto-detects:
-# 1. Try port 27018 (Atlas Local Docker)
-# 2. Fallback to port 27017 (standard mongod)
+# 1. Try port 27017 (Atlas Local Docker default)
+# 2. Try port 27018 (legacy/custom Atlas Local setups)
+# 3. Fallback to mongodb-memory-server
 ```
 
 ## Common Errors

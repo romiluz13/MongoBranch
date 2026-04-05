@@ -16,10 +16,13 @@ import type {
   MergeResult,
   DiffResult,
 } from "./types.ts";
+import { MAIN_BRANCH } from "./types.ts";
 import { MergeEngine } from "./merge.ts";
 import { DiffEngine } from "./diff.ts";
 import { ProtectionManager } from "./protection.ts";
 import { HookManager } from "./hooks.ts";
+import { CommitEngine } from "./commit.ts";
+import { hasBranchChangesSince } from "./watcher.ts";
 
 const DEPLOY_REQUESTS_COLLECTION = "deploy_requests";
 
@@ -31,6 +34,7 @@ export class DeployRequestManager {
   private diffEngine: DiffEngine;
   private protectionManager: ProtectionManager;
   private hookManager: HookManager;
+  private commitEngine: CommitEngine;
 
   constructor(client: MongoClient, config: MongoBranchConfig) {
     this.client = client;
@@ -41,6 +45,7 @@ export class DeployRequestManager {
     this.diffEngine = new DiffEngine(client, config);
     this.protectionManager = new ProtectionManager(client, config);
     this.hookManager = new HookManager(client, config);
+    this.commitEngine = new CommitEngine(client, config);
   }
 
   async initialize(): Promise<void> {
@@ -54,6 +59,7 @@ export class DeployRequestManager {
     ).catch(() => {}); // May already exist
     await this.protectionManager.initialize();
     await this.hookManager.initialize();
+    await this.commitEngine.initialize();
   }
 
   /**
@@ -75,10 +81,12 @@ export class DeployRequestManager {
     });
     if (!srcBranch) throw new Error(`Source branch "${sourceBranch}" not found`);
 
-    const tgtBranch = await meta.collection("branches").findOne({
-      name: targetBranch, status: { $ne: "deleted" },
-    });
-    if (!tgtBranch) throw new Error(`Target branch "${targetBranch}" not found`);
+    if (targetBranch !== MAIN_BRANCH) {
+      const tgtBranch = await meta.collection("branches").findOne({
+        name: targetBranch, status: { $ne: "deleted" },
+      });
+      if (!tgtBranch) throw new Error(`Target branch "${targetBranch}" not found`);
+    }
 
     // Check no duplicate open request for same source→target
     const existing = await this.requests.findOne({
@@ -132,12 +140,47 @@ export class DeployRequestManager {
       throw new Error(`Cannot approve deploy request in "${dr.status}" state`);
     }
 
-    await this.requests.updateOne({ id }, {
-      $set: { status: "approved", reviewedBy },
-      $currentDate: { updatedAt: true },
+    const approvalCapturedAt = new Date();
+    const approvalResult = await this.client.db(this.config.metaDatabase).command({
+      update: DEPLOY_REQUESTS_COLLECTION,
+      updates: [{
+        q: { id },
+        u: {
+          $set: {
+            status: "approved",
+            reviewedBy,
+            approvalCapturedAt,
+          },
+          $unset: {
+            approvalInvalidatedAt: "",
+            approvalInvalidationReason: "",
+          },
+          $currentDate: {
+            updatedAt: true,
+          },
+        },
+        multi: false,
+      }],
     });
+    const approvalOperationTime =
+      approvalResult.operationTime ?? approvalResult.$clusterTime?.clusterTime ?? null;
+    if (approvalOperationTime) {
+      await this.requests.updateOne(
+        { id },
+        {
+          $set: { approvalOperationTime },
+          $currentDate: { updatedAt: true },
+        },
+      );
+    }
 
-    return { ...dr, status: "approved", reviewedBy };
+    return {
+      ...dr,
+      status: "approved",
+      reviewedBy,
+      approvalCapturedAt,
+      ...(approvalOperationTime ? { approvalOperationTime } : {}),
+    };
   }
 
   /**
@@ -172,6 +215,8 @@ export class DeployRequestManager {
       throw new Error(`Cannot execute deploy request in "${dr.status}" state — must be approved`);
     }
 
+    await this.assertApprovalStillCurrent(dr);
+
     // Fire pre-merge hooks (can reject)
     const preCtx = HookManager.createContext("pre-merge", dr.sourceBranch, dr.createdBy);
     const preResult = await this.hookManager.executePreHooks(preCtx);
@@ -179,8 +224,40 @@ export class DeployRequestManager {
       throw new Error(`Pre-merge hook rejected: ${preResult.reason ?? "unknown"}`);
     }
 
-    // Perform the merge
-    const mergeResult = await this.mergeEngine.merge(dr.sourceBranch, dr.targetBranch);
+    const threeWayResult = await this.mergeEngine.threeWayMerge(
+      dr.sourceBranch,
+      dr.targetBranch,
+      this.commitEngine,
+      {
+        conflictStrategy: "manual",
+        author: dr.reviewedBy ?? dr.createdBy,
+        message: `Deploy request #${dr.id}: ${dr.sourceBranch} → ${dr.targetBranch}`,
+      }
+    );
+    if (!threeWayResult.success) {
+      const summary = threeWayResult.conflicts
+        .slice(0, 3)
+        .map((conflict) => `${conflict.collection}/${String(conflict.documentId)}:${conflict.field}`)
+        .join(", ");
+      throw new Error(
+        `Deploy request "${id}" has merge conflicts${summary ? ` (${summary})` : ""}`
+      );
+    }
+    const mergeResult: MergeResult = {
+      sourceBranch: threeWayResult.sourceBranch,
+      targetBranch: threeWayResult.targetBranch,
+      collectionsAffected: threeWayResult.collectionsAffected,
+      documentsAdded: threeWayResult.documentsAdded,
+      documentsRemoved: threeWayResult.documentsRemoved,
+      documentsModified: threeWayResult.documentsModified,
+      conflicts: threeWayResult.conflicts.map((conflict) => ({
+        collection: conflict.collection,
+        documentId: conflict.documentId,
+        reason: `Resolved field "${conflict.field}"`,
+      })),
+      success: true,
+      dryRun: threeWayResult.dryRun,
+    };
 
     await this.requests.updateOne({ id }, {
       $set: { status: "merged" },
@@ -216,5 +293,53 @@ export class DeployRequestManager {
     if (options?.targetBranch) filter.targetBranch = options.targetBranch;
 
     return this.requests.find(filter).sort({ createdAt: -1 }).toArray();
+  }
+
+  private async assertApprovalStillCurrent(dr: DeployRequest): Promise<void> {
+    if (!dr.approvalOperationTime) {
+      throw new Error(
+        `Deploy request "${dr.id}" is missing an approval drift baseline. Re-open or re-approve the request.`
+      );
+    }
+
+    const [sourceChanged, targetChanged] = await Promise.all([
+      hasBranchChangesSince(this.client, this.config, dr.sourceBranch, dr.approvalOperationTime),
+      hasBranchChangesSince(this.client, this.config, dr.targetBranch, dr.approvalOperationTime),
+    ]);
+
+    const driftReasons: string[] = [];
+    if (sourceChanged) {
+      driftReasons.push(`source branch "${dr.sourceBranch}" changed since approval`);
+    }
+    if (targetChanged) {
+      driftReasons.push(`target branch "${dr.targetBranch}" changed since approval`);
+    }
+
+    if (driftReasons.length === 0) {
+      await this.requests.updateOne(
+        { id: dr.id },
+        { $currentDate: { lastDriftCheckAt: true, updatedAt: true } },
+      );
+      return;
+    }
+
+    const approvalInvalidationReason = driftReasons.join("; ");
+    await this.requests.updateOne(
+      { id: dr.id },
+      {
+        $set: {
+          approvalInvalidationReason,
+        },
+        $currentDate: {
+          approvalInvalidatedAt: true,
+          lastDriftCheckAt: true,
+          updatedAt: true,
+        },
+      },
+    );
+
+    throw new Error(
+      `Deploy request "${dr.id}" is stale: ${approvalInvalidationReason}. Re-approve after reviewing the latest state.`
+    );
   }
 }

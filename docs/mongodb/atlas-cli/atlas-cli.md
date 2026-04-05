@@ -118,21 +118,33 @@ mongodump --uri "mongodb://localhost:27017" --db mydb --out ./dump
 mongorestore --uri "mongodb://localhost:27017" --db mydb ./dump/mydb
 ```
 
-## MongoBranch Local Setup (docker-compose.yml)
+## MongoBranch Local Setup
 
-Instead of `atlas deployments setup`, MongoBranch uses Docker Compose directly:
+For a fresh external consumer workspace, MongoBranch now prefers:
+
+```bash
+mb init --db myapp --start-local
+mb doctor
+mb access status
+```
+
+That flow writes `.mongobranch.yaml`, writes an auth-enabled Atlas Local Docker Compose file,
+starts the local deployment, and proves the runtime with live capability and RBAC enforcement probes.
+
+Inside the MongoBranch repo itself, contributors still use Docker Compose directly:
+
 ```yaml
-# Port 27018 to avoid conflicts with other local MongoDB on 27017
+# Port 27017 (MongoDB default for Atlas Local Docker)
 # `preview` tag = latest MongoDB + experimental features (Search, auto-embedding)
 services:
   mongobranch:
     image: mongodb/mongodb-atlas-local:preview
     ports:
-      - 27018:27017
+      - 27017:27017
 ```
 
 ```bash
-docker compose up -d          # Start Atlas Local on port 27018
+docker compose up -d          # Start Atlas Local on port 27017
 bun test                       # Tests auto-detect and connect
 docker compose down            # Stop when done
 ```
@@ -141,7 +153,8 @@ docker compose down            # Stop when done
 
 | Feature | MongoBranch Use |
 |---------|-----------------|
-| Atlas Local Docker (port 27018) | Development + testing with full Atlas features |
+| Atlas Local Docker (port 27017) | Development + testing with full Atlas features |
+| `mb init --start-local` | Fastest install-to-ready path for new Bun consumer workspaces |
 | Plugins | MongoBranch as `atlas` plugin (Wave 4) |
 | Import/Export | Branch snapshot backup/restore |
 | Search indexes | Branching Atlas Search configurations |

@@ -8,7 +8,8 @@
  * This is the backbone — tags, cherry-pick, revert, time-travel all need commits.
  */
 import { createHash } from "crypto";
-import type { MongoClient, Collection, AnyBulkWriteOperation } from "mongodb";
+import type { MongoClient, Collection, AnyBulkWriteOperation, ClientSession } from "mongodb";
+import { ObjectId } from "mongodb";
 import type {
   MongoBranchConfig,
   Commit,
@@ -76,22 +77,57 @@ export class CommitEngine {
    * Create a commit — snapshot current branch state into an immutable record.
    */
   async commit(options: CommitOptions): Promise<Commit> {
-    const { branchName, message, author = "unknown" } = options;
+    const collectionNames = await this.listSnapshotCollections(
+      options.branchName,
+      options.collectionNames ?? []
+    );
+
+    if (options.session) {
+      return this.commitWithSession({ ...options, collectionNames }, options.session);
+    }
+
+    const session = this.client.startSession();
+    let created: Commit | null = null;
+    try {
+      await session.withTransaction(async () => {
+        created = await this.commitWithSession(
+          { ...options, session, collectionNames },
+          session
+        );
+      });
+    } finally {
+      await session.endSession();
+    }
+
+    if (!created) {
+      throw new Error(`Commit "${options.message}" did not complete`);
+    }
+
+    return created;
+  }
+
+  private async commitWithSession(options: CommitOptions, session: ClientSession): Promise<Commit> {
+    const { branchName, message, author = "unknown", collectionNames = [] } = options;
 
     // Build snapshot of current branch state
-    const snapshot = await this.buildSnapshot(branchName);
+    const snapshot = await this.buildSnapshot(branchName, session, collectionNames);
 
-    // Get current HEAD to set as parent
-    const branch = await this.branches.findOne({
-      name: branchName,
-      status: { $ne: "deleted" },
-    });
+    const branch = branchName === MAIN_BRANCH
+      ? null
+      : await this.branches.findOne({
+          name: branchName,
+          status: { $ne: "deleted" },
+        }, { session });
+    if (branchName !== MAIN_BRANCH && !branch) {
+      throw new Error(`Branch "${branchName}" not found`);
+    }
+    const headCommit = await this.getHeadCommitHash(branchName, session);
 
     let parentHashes: string[];
     if (options.parentOverrides) {
       parentHashes = options.parentOverrides;
-    } else if (branch?.headCommit) {
-      parentHashes = [branch.headCommit];
+    } else if (headCommit) {
+      parentHashes = [headCommit];
     } else {
       parentHashes = []; // Root commit (first commit on branch)
     }
@@ -111,23 +147,19 @@ export class CommitEngine {
       snapshot,
     };
 
-    await this.commits.insertOne({ ...commit });
+    await this.commits.insertOne({ ...commit }, { session });
 
     // Update HEAD pointer on the branch
     if (branchName !== MAIN_BRANCH) {
       await this.branches.updateOne(
         { name: branchName, status: { $ne: "deleted" } },
-        { $set: { headCommit: hash }, $currentDate: { updatedAt: true } }
+        { $set: { headCommit: hash }, $currentDate: { updatedAt: true } },
+        { session }
       );
     }
 
-    // Store full document data for time travel (Phase 6.1)
-    // Non-blocking — time travel storage failure must never break commits
-    try {
-      await this.storeCommitDocuments(hash, branchName);
-    } catch {
-      // Silently skip — time travel data is optional, commits are critical
-    }
+    // Stored snapshots now back time travel, merge-base reconstruction, cherry-pick, and revert.
+    await this.storeCommitDocuments(hash, branchName, session, collectionNames);
 
     return commit;
   }
@@ -135,34 +167,47 @@ export class CommitEngine {
   /**
    * Store full document data for a commit — enables time travel queries.
    */
-  private async storeCommitDocuments(commitHash: string, branchName: string): Promise<void> {
-    const branch = await this.branches.findOne({
-      name: branchName,
-      status: { $ne: "deleted" },
-    });
-    if (!branch) return;
+  private async storeCommitDocuments(
+    commitHash: string,
+    branchName: string,
+    session: ClientSession,
+    collectionNames: string[]
+  ): Promise<void> {
+    const branch = branchName === MAIN_BRANCH
+      ? null
+      : await this.branches.findOne({
+          name: branchName,
+          status: { $ne: "deleted" },
+        }, { session });
 
-    const dbName = branch.branchDatabase ?? `${this.config.branchPrefix}${sanitizeBranchDbName(branchName)}`;
+    if (branchName !== MAIN_BRANCH && !branch) {
+      throw new Error(`Branch "${branchName}" not found`);
+    }
+
+    const dbName = branchName === MAIN_BRANCH
+      ? this.config.sourceDatabase
+      : branch!.branchDatabase ?? `${this.config.branchPrefix}${sanitizeBranchDbName(branchName)}`;
     const db = this.client.db(dbName);
-    const collections = await db.listCollections().toArray();
 
-    for (const coll of collections) {
-      if (coll.name.startsWith("system.")) continue;
-      const docs = await db.collection(coll.name).find({}).toArray();
+    for (const collectionName of collectionNames) {
+      if (collectionName.startsWith("system.")) continue;
+
+      const docs = await db.collection(collectionName).find({}, { session }).toArray().catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("ns not found") || message.includes("NamespaceNotFound")) {
+          return [];
+        }
+        throw error;
+      });
       if (docs.length === 0) continue;
-
-      const cleanDocs = docs.map(d => ({
-        ...d,
-        _id: d._id?.toString?.() ?? d._id,
-      }));
 
       await this.commitData.insertOne({
         commitHash,
-        collection: coll.name,
-        documents: cleanDocs as Record<string, unknown>[],
-        documentCount: cleanDocs.length,
+        collection: collectionName,
+        documents: docs as Record<string, unknown>[],
+        documentCount: docs.length,
         storedAt: new Date(),
-      });
+      }, { session });
     }
   }
 
@@ -174,22 +219,48 @@ export class CommitEngine {
   }
 
   /**
+   * Load the stored per-collection documents for a commit snapshot.
+   */
+  async getCommitDocuments(commitHash: string): Promise<Record<string, Record<string, unknown>[]>> {
+    const rows = await this.commitData.find({ commitHash }).toArray();
+    const snapshot: Record<string, Record<string, unknown>[]> = {};
+
+    for (const row of rows) {
+      snapshot[row.collection] = row.documents.map((doc) => ({ ...doc }));
+    }
+
+    return snapshot;
+  }
+
+  async getHeadCommitHash(branchName: string, session?: ClientSession): Promise<string | null> {
+    if (branchName === MAIN_BRANCH) {
+      const options = session
+        ? { session, sort: { timestamp: -1 as const } }
+        : { sort: { timestamp: -1 as const } };
+      const mainHead = await this.commits.findOne({ branchName: MAIN_BRANCH }, options);
+      return mainHead?.hash ?? null;
+    }
+
+    const branch = await this.branches.findOne(
+      { name: branchName, status: { $ne: "deleted" } },
+      session ? { session } : {}
+    );
+    return branch?.headCommit ?? null;
+  }
+
+  /**
    * Walk the commit chain from HEAD backward.
    * Returns commits in reverse chronological order.
    */
   async getLog(branchName: string, limit: number = 50): Promise<CommitLog> {
-    const branch = await this.branches.findOne({
-      name: branchName,
-      status: { $ne: "deleted" },
-    });
-
-    if (!branch?.headCommit) {
+    const headCommit = await this.getHeadCommitHash(branchName);
+    if (!headCommit) {
       return { branchName, commits: [] };
     }
 
     // Walk the parent chain from HEAD
     const commits: Commit[] = [];
-    let currentHash: string | null = branch.headCommit;
+    let currentHash: string | null = headCommit;
 
     while (currentHash && commits.length < limit) {
       const commit: Commit | null = await this.commits.findOne({ hash: currentHash });
@@ -207,17 +278,16 @@ export class CommitEngine {
    * Uses $graphLookup to traverse commit ancestry server-side.
    */
   async getCommonAncestor(branchA: string, branchB: string): Promise<Commit | null> {
-    const metaA = await this.branches.findOne({ name: branchA, status: { $ne: "deleted" } });
-    const metaB = await this.branches.findOne({ name: branchB, status: { $ne: "deleted" } });
-
-    if (!metaA?.headCommit || !metaB?.headCommit) return null;
+    const headA = await this.getHeadCommitHash(branchA);
+    const headB = await this.getHeadCommitHash(branchB);
+    if (!headA || !headB) return null;
 
     // Collect all ancestors of both branches using $graphLookup (server-side traversal)
     const collName = this.commits.collectionName;
     const [resultA] = await this.commits.aggregate<{
       ancestors: Array<{ hash: string; depth: number }>;
     }>([
-      { $match: { hash: metaA.headCommit } },
+      { $match: { hash: headA } },
       { $graphLookup: {
           from: collName,
           startWith: "$parentHashes",
@@ -232,7 +302,7 @@ export class CommitEngine {
     const [resultB] = await this.commits.aggregate<{
       ancestors: Array<{ hash: string; depth: number }>;
     }>([
-      { $match: { hash: metaB.headCommit } },
+      { $match: { hash: headB } },
       { $graphLookup: {
           from: collName,
           startWith: "$parentHashes",
@@ -248,7 +318,7 @@ export class CommitEngine {
 
     // Include the HEAD commits themselves as depth -1 candidates
     const ancestorsAMap = new Map<string, number>();
-    ancestorsAMap.set(metaA.headCommit, -1);
+    ancestorsAMap.set(headA, -1);
     for (const a of resultA.ancestors) {
       ancestorsAMap.set(a.hash, a.depth);
     }
@@ -258,8 +328,8 @@ export class CommitEngine {
     let bestDepth = Infinity;
 
     // Check if B's HEAD is an ancestor of A
-    if (ancestorsAMap.has(metaB.headCommit)) {
-      bestHash = metaB.headCommit;
+    if (ancestorsAMap.has(headB)) {
+      bestHash = headB;
       bestDepth = -1;
     }
 
@@ -297,14 +367,11 @@ export class CommitEngine {
 
     // If isBranch, resolve to HEAD commit of that branch
     if (options.isBranch) {
-      const branch = await this.branches.findOne({
-        name: commitHashOrBranch,
-        status: { $ne: "deleted" },
-      });
-      if (!branch?.headCommit) {
+      const headCommit = await this.getHeadCommitHash(commitHashOrBranch);
+      if (!headCommit) {
         throw new Error(`Branch "${commitHashOrBranch}" has no commits to tag`);
       }
-      commitHash = branch.headCommit;
+      commitHash = headCommit;
     }
 
     // Verify commit exists
@@ -378,22 +445,18 @@ export class CommitEngine {
 
     // Get the parent commit to compute the diff
     const parentHash = sourceCommit.parentHashes[0];
-    const parentCommit = parentHash ? await this.getCommit(parentHash) : null;
+    const parentSnapshotDocs = parentHash ? await this.getCommitDocuments(parentHash) : {};
+    const commitSnapshotDocs = await this.getCommitDocuments(sourceCommit.hash);
 
-    // Resolve source and target databases
-    const sourceDbName = await this.resolveBranchDbName(sourceCommit.branchName);
+    // Resolve target database
     const targetDbName = await this.resolveBranchDbName(targetBranch);
     const targetDb = this.client.db(targetDbName);
-
-    // Compute what changed in this commit by comparing snapshots
-    const parentSnapshot = parentCommit?.snapshot ?? { collections: {} };
-    const commitSnapshot = sourceCommit.snapshot;
 
     let added = 0, removed = 0, modified = 0;
 
     const allCollections = new Set([
-      ...Object.keys(commitSnapshot.collections),
-      ...Object.keys(parentSnapshot.collections),
+      ...Object.keys(commitSnapshotDocs),
+      ...Object.keys(parentSnapshotDocs),
     ]);
 
     // Apply all changes atomically in a transaction
@@ -402,38 +465,17 @@ export class CommitEngine {
     try {
       await session.withTransaction(async () => {
         for (const colName of allCollections) {
-          const parentCol = parentSnapshot.collections[colName];
-          const commitCol = commitSnapshot.collections[colName];
-
-          if (!parentCol && commitCol) {
-            const sourceDb = this.client.db(sourceDbName);
-            const docs = await sourceDb.collection(colName).find({}, { session }).toArray();
-            if (docs.length > 0) {
-              await targetDb.collection(colName).insertMany(
-                docs.map(d => ({ ...d })),
-                { session }
-              );
-              added += docs.length;
-            }
-          } else if (parentCol && !commitCol) {
-            const count = await targetDb.collection(colName).countDocuments({}, { session });
-            await targetDb.collection(colName).drop({ session } as any).catch(() => {});
-            removed += count;
-          } else if (parentCol && commitCol && parentCol.checksum !== commitCol.checksum) {
-            const sourceDb = this.client.db(sourceDbName);
-            const sourceDocs = await sourceDb.collection(colName).find({}, { session }).toArray();
-            const ops: AnyBulkWriteOperation[] = [];
-            for (const doc of sourceDocs) {
-              // Use replaceOne with upsert for atomic insert-or-replace
-              ops.push({
-                replaceOne: { filter: { _id: doc._id }, replacement: { ...doc }, upsert: true },
-              });
-            }
-            if (ops.length > 0) {
-              const result = await targetDb.collection(colName).bulkWrite(ops, { ordered: true, session });
-              added += result.upsertedCount;
-              modified += result.modifiedCount;
-            }
+          const delta = await this.applyCollectionDelta(
+            targetDb,
+            colName,
+            parentSnapshotDocs[colName] ?? [],
+            commitSnapshotDocs[colName] ?? [],
+            session
+          );
+          if (delta.changed) {
+            added += delta.added;
+            removed += delta.removed;
+            modified += delta.modified;
           }
         }
 
@@ -441,6 +483,8 @@ export class CommitEngine {
           branchName: targetBranch,
           message: `Cherry-pick: ${sourceCommit.message} (from ${commitHash.slice(0, 8)})`,
           author,
+          collectionNames: Array.from(allCollections),
+          session,
         });
         newCommitHash = newCommit.hash;
       });
@@ -472,20 +516,17 @@ export class CommitEngine {
     if (!targetCommit) throw new Error(`Commit "${commitHash}" not found`);
 
     const parentHash = targetCommit.parentHashes[0];
-    const parentCommit = parentHash ? await this.getCommit(parentHash) : null;
+    const parentSnapshotDocs = parentHash ? await this.getCommitDocuments(parentHash) : {};
+    const targetSnapshotDocs = await this.getCommitDocuments(targetCommit.hash);
 
     const branchDbName = await this.resolveBranchDbName(branchName);
     const branchDb = this.client.db(branchDbName);
 
-    // Revert = apply the parent state for collections that changed
-    const parentSnapshot = parentCommit?.snapshot ?? { collections: {} };
-    const commitSnapshot = targetCommit.snapshot;
-
     let reverted = 0;
 
     const allCollections = new Set([
-      ...Object.keys(commitSnapshot.collections),
-      ...Object.keys(parentSnapshot.collections),
+      ...Object.keys(targetSnapshotDocs),
+      ...Object.keys(parentSnapshotDocs),
     ]);
 
     // Apply revert atomically in a transaction
@@ -494,16 +535,15 @@ export class CommitEngine {
     try {
       await session.withTransaction(async () => {
         for (const colName of allCollections) {
-          const parentCol = parentSnapshot.collections[colName];
-          const commitCol = commitSnapshot.collections[colName];
-
-          if (parentCol && commitCol && parentCol.checksum !== commitCol.checksum) {
-            const docs = await branchDb.collection(colName).find({}, { session }).toArray();
-            reverted += docs.length;
-          } else if (!parentCol && commitCol) {
-            const count = await branchDb.collection(colName).countDocuments({}, { session });
-            await branchDb.collection(colName).drop({ session } as any).catch(() => {});
-            reverted += count;
+          const delta = await this.applyCollectionDelta(
+            branchDb,
+            colName,
+            targetSnapshotDocs[colName] ?? [],
+            parentSnapshotDocs[colName] ?? [],
+            session
+          );
+          if (delta.changed) {
+            reverted += delta.added + delta.removed + delta.modified;
           }
         }
 
@@ -511,6 +551,8 @@ export class CommitEngine {
           branchName,
           message: `Revert: ${targetCommit.message} (reverting ${commitHash.slice(0, 8)})`,
           author,
+          collectionNames: Array.from(allCollections),
+          session,
         });
         newCommitHash = newCommit.hash;
       });
@@ -529,46 +571,174 @@ export class CommitEngine {
 
   // ── Private Helpers ───────────────────────────────────────
 
-  private async resolveBranchDbName(branchName: string): Promise<string> {
+  private async resolveBranchDbName(branchName: string, session?: ClientSession): Promise<string> {
     if (branchName === MAIN_BRANCH) {
       return this.config.sourceDatabase;
     }
     const meta = await this.branches.findOne({
       name: branchName,
       status: { $ne: "deleted" },
-    });
+    }, session ? { session } : {});
     if (!meta) {
       throw new Error(`Branch "${branchName}" not found`);
     }
     return meta.branchDatabase;
   }
 
-  private async buildSnapshot(branchName: string): Promise<CommitSnapshot> {
-    const dbName = await this.resolveBranchDbName(branchName);
+  private async applyCollectionDelta(
+    db: { collection: (name: string) => { bulkWrite: Function } },
+    collectionName: string,
+    fromDocs: Record<string, unknown>[],
+    toDocs: Record<string, unknown>[],
+    session: ClientSession
+  ): Promise<{ added: number; removed: number; modified: number; changed: boolean }> {
+    const fromMap = new Map<string, Record<string, unknown>>();
+    const toMap = new Map<string, Record<string, unknown>>();
+
+    for (const doc of fromDocs) {
+      fromMap.set(this.getDocumentKey(doc._id), doc);
+    }
+    for (const doc of toDocs) {
+      toMap.set(this.getDocumentKey(doc._id), doc);
+    }
+
+    const ops: AnyBulkWriteOperation[] = [];
+    let added = 0;
+    let removed = 0;
+    let modified = 0;
+
+    for (const [key, toDoc] of toMap) {
+      const fromDoc = fromMap.get(key);
+      if (!fromDoc) {
+        ops.push({
+          replaceOne: {
+            filter: { _id: toDoc._id as any },
+            replacement: { ...toDoc },
+            upsert: true,
+          },
+        });
+        added++;
+        continue;
+      }
+
+      if (this.stableSerialize(fromDoc) !== this.stableSerialize(toDoc)) {
+        ops.push({
+          replaceOne: {
+            filter: { _id: toDoc._id as any },
+            replacement: { ...toDoc },
+            upsert: true,
+          },
+        });
+        modified++;
+      }
+    }
+
+    for (const [key, fromDoc] of fromMap) {
+      if (!toMap.has(key)) {
+        ops.push({
+          deleteOne: { filter: { _id: fromDoc._id as any } },
+        });
+        removed++;
+      }
+    }
+
+    if (ops.length > 0) {
+      await db.collection(collectionName).bulkWrite(ops, { ordered: true, session });
+    }
+
+    return {
+      added,
+      removed,
+      modified,
+      changed: ops.length > 0,
+    };
+  }
+
+  private async buildSnapshot(
+    branchName: string,
+    session: ClientSession,
+    collectionNames: string[]
+  ): Promise<CommitSnapshot> {
+    const dbName = await this.resolveBranchDbName(branchName, session);
     const db = this.client.db(dbName);
-    const collections = await db.listCollections().toArray();
 
     const snapshot: CommitSnapshot = { collections: {} };
 
-    for (const coll of collections) {
+    for (const collectionName of collectionNames) {
       // Skip system and meta collections
-      if (coll.name.startsWith("system.") || coll.name.startsWith("__mongobranch")) continue;
+      if (collectionName.startsWith("system.") || collectionName.startsWith("__mongobranch")) continue;
 
-      const collection = db.collection(coll.name);
-      const count = await collection.countDocuments();
-
-      // Compute checksum: SHA-256 of sorted _id values
-      const ids = await collection
-        .find({}, { projection: { _id: 1 } })
+      const collection = db.collection(collectionName);
+      const docs = await collection
+        .find({}, { session })
         .sort({ _id: 1 })
-        .toArray();
-      const idString = ids.map((d) => d._id.toString()).join(",");
-      const checksum = createHash("sha256").update(idString).digest("hex").slice(0, 16);
+        .toArray()
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.includes("ns not found") || message.includes("NamespaceNotFound")) {
+            return [];
+          }
+          throw error;
+        });
+      const checksum = createHash("sha256")
+        .update(docs.map((doc) => this.stableSerialize(doc as Record<string, unknown>)).join("\n"))
+        .digest("hex")
+        .slice(0, 16);
 
-      snapshot.collections[coll.name] = { documentCount: count, checksum };
+      snapshot.collections[collectionName] = { documentCount: docs.length, checksum };
     }
 
     return snapshot;
+  }
+
+  private async listSnapshotCollections(
+    branchName: string,
+    extraCollectionNames: string[]
+  ): Promise<string[]> {
+    const dbName = await this.resolveBranchDbName(branchName);
+    const db = this.client.db(dbName);
+    const collections = await db.listCollections().toArray();
+    const names = new Set<string>();
+
+    for (const coll of collections) {
+      if (coll.name.startsWith("system.") || coll.name.startsWith("__mongobranch")) continue;
+      names.add(coll.name);
+    }
+    for (const collectionName of extraCollectionNames) {
+      if (collectionName.startsWith("system.") || collectionName.startsWith("__mongobranch")) continue;
+      names.add(collectionName);
+    }
+
+    return Array.from(names).sort();
+  }
+
+  private getDocumentKey(id: unknown): string {
+    if (id instanceof ObjectId) return id.toHexString();
+    if (id instanceof Date) return id.toISOString();
+    return JSON.stringify(id);
+  }
+
+  private stableSerialize(value: unknown): string {
+    return JSON.stringify(this.normalizeForChecksum(value));
+  }
+
+  private normalizeForChecksum(value: unknown): unknown {
+    if (value instanceof Date) {
+      return { $date: value.toISOString() };
+    }
+    if (value instanceof ObjectId) {
+      return { $oid: value.toHexString() };
+    }
+    if (Array.isArray(value)) {
+      return value.map((item) => this.normalizeForChecksum(item));
+    }
+    if (value && typeof value === "object") {
+      const entries = Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, child]) => [key, this.normalizeForChecksum(child)]);
+      return Object.fromEntries(entries);
+    }
+    return value;
   }
 
   private computeHash(

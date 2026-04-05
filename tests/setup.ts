@@ -158,6 +158,8 @@ export async function getTestEnvironment(): Promise<{
 
 /**
  * Clean up all branch databases (anything starting with __mb_).
+ * Clears the shared __mongobranch metadata DB without dropping it to avoid
+ * cross-file races when Vitest runs suites in parallel.
  * Retries on "database is being dropped" errors and waits for completion.
  */
 export async function cleanupBranches(mongoClient: MongoClient): Promise<void> {
@@ -167,7 +169,7 @@ export async function cleanupBranches(mongoClient: MongoClient): Promise<void> {
       const { databases } = await adminDb.command({ listDatabases: 1 });
 
       for (const dbInfo of databases) {
-        if (dbInfo.name.startsWith("__mb_") || dbInfo.name === "__mongobranch") {
+        if (dbInfo.name.startsWith("__mb_")) {
           try {
             await mongoClient.db(dbInfo.name).dropDatabase();
           } catch (dropErr: unknown) {
@@ -180,6 +182,16 @@ export async function cleanupBranches(mongoClient: MongoClient): Promise<void> {
             throw dropErr;
           }
         }
+      }
+
+      const metaDb = mongoClient.db("__mongobranch");
+      const metaCollections = await metaDb.listCollections().toArray().catch(() => []);
+      for (const collection of metaCollections) {
+        if (collection.name.startsWith("system.")) continue;
+        await metaDb.collection(collection.name).deleteMany({}).catch((clearErr: unknown) => {
+          const msg = clearErr instanceof Error ? clearErr.message : String(clearErr);
+          if (!msg.includes("being dropped")) throw clearErr;
+        });
       }
 
       // Wait briefly for all async drops to complete on the server

@@ -44,6 +44,35 @@ db.command({ collMod: "users", ... }) // Run command
 db.admin()                         // Admin operations
 ```
 
+### `db.command()` Responses
+```typescript
+const result = await db.command({ hello: 1 })
+result.ok
+result.operationTime
+result.$clusterTime
+```
+
+- The Node.js driver returns raw command response documents from `db.command()`
+- Command responses include `operationTime` and `$clusterTime`
+- MongoBranch uses these fields to capture Atlas Local review fences, then checks
+  later changes with database change streams
+
+### Auth / RBAC Introspection
+```typescript
+const status = await client.db("admin").command({
+  connectionStatus: 1,
+  showPrivileges: true,
+});
+
+status.authInfo.authenticatedUsers;
+status.authInfo.authenticatedUserRoles;
+```
+
+- MongoBranch uses `connectionStatus` to inspect the current auth context before
+  claiming that least-privilege access control is active
+- Practical rule: successful `createUser` / `createRole` is not enough; verify
+  real enforcement with a restricted-user probe
+
 ### Collection
 ```typescript
 const coll = db.collection("users")

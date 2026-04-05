@@ -13,6 +13,7 @@ import {
   cleanupBranches,
 } from "../setup.ts";
 import { BranchManager } from "../../src/core/branch.ts";
+import { CommitEngine } from "../../src/core/commit.ts";
 import { MergeEngine } from "../../src/core/merge.ts";
 import type { MongoBranchConfig } from "../../src/core/types.ts";
 import { SEED_DATABASE } from "../seed.ts";
@@ -22,6 +23,7 @@ let uri: string;
 let config: MongoBranchConfig;
 let branchManager: BranchManager;
 let mergeEngine: MergeEngine;
+let commitEngine: CommitEngine;
 
 beforeAll(async () => {
   const env = await startMongoDB();
@@ -36,6 +38,9 @@ afterAll(async () => {
 beforeEach(async () => {
   await getTestEnvironment();
   await cleanupBranches(client);
+  await client.db("__mongobranch").collection("commits").deleteMany({});
+  await client.db("__mongobranch").collection("commit_data").deleteMany({});
+  await client.db("__mongobranch").collection("tags").deleteMany({});
 
   config = {
     uri,
@@ -45,6 +50,8 @@ beforeEach(async () => {
   };
   branchManager = new BranchManager(client, config);
   await branchManager.initialize();
+  commitEngine = new CommitEngine(client, config);
+  await commitEngine.initialize();
   mergeEngine = new MergeEngine(client, config);
 });
 
@@ -204,94 +211,206 @@ describe("MergeEngine.merge — rollback on failure", () => {
 });
 
 describe("MergeEngine.merge — conflict detection", () => {
-  it("detects conflicts when same document modified on both sides", async () => {
-    // Create branch
-    const branch = await branchManager.createBranch({ name: "conflict-src" });
-    const branchDb = client.db(branch.branchDatabase);
-    const mainDb = client.db(SEED_DATABASE);
-
-    // Find a user that exists on both sides
-    const user = await mainDb.collection("users").findOne({ role: "admin" });
+  it("uses the shared ancestor to detect real concurrent conflicts", async () => {
+    const target = await branchManager.createBranch({ name: "conflict-target" });
+    const user = await client.db(target.branchDatabase).collection("users").findOne({ role: "admin" });
     expect(user).not.toBeNull();
 
-    // Modify the SAME user on the branch
-    await branchDb.collection("users").updateOne(
+    await commitEngine.commit({ branchName: "conflict-target", message: "Shared base" });
+    const source = await branchManager.createBranch({ name: "conflict-src", from: "conflict-target" });
+
+    await client.db(target.branchDatabase).collection("users").updateOne(
       { _id: user!._id },
-      { $set: { name: "Branch Version" } }
+      { $set: { name: "Target Version" } }
+    );
+    await client.db(source.branchDatabase).collection("users").updateOne(
+      { _id: user!._id },
+      { $set: { name: "Source Version" } }
     );
 
-    // Modify the SAME user on main (simulating another branch merged first)
-    await mainDb.collection("users").updateOne(
-      { _id: user!._id },
-      { $set: { name: "Main Version" } }
-    );
-
-    // Merge should detect the conflict
-    const result = await mergeEngine.merge("conflict-src", "main", { detectConflicts: true });
+    const result = await mergeEngine.merge("conflict-src", "conflict-target", { detectConflicts: true });
     expect(result.conflicts.length).toBeGreaterThan(0);
     expect(result.conflicts[0]!.documentId).toEqual(user!._id);
     expect(result.conflicts[0]!.collection).toBe("users");
   });
 
+  it("does not flag branch-only updates as conflicts when the target is unchanged since branching", async () => {
+    const target = await branchManager.createBranch({ name: "ff-target" });
+    await commitEngine.commit({ branchName: "ff-target", message: "Shared base" });
+    const source = await branchManager.createBranch({ name: "ff-source", from: "ff-target" });
+
+    await client.db(source.branchDatabase).collection("users").updateOne(
+      { name: "Alice Chen" },
+      { $set: { department: "AI Platform" } }
+    );
+
+    const result = await mergeEngine.merge("ff-source", "ff-target", {
+      detectConflicts: true,
+      conflictStrategy: "abort",
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.conflicts).toHaveLength(0);
+
+    const alice = await client.db(target.branchDatabase).collection("users").findOne({ name: "Alice Chen" });
+    expect(alice!.department).toBe("AI Platform");
+  });
+
   it("applies non-conflicting changes even when conflicts exist (ours strategy)", async () => {
-    const branch = await branchManager.createBranch({ name: "ours-test" });
-    const branchDb = client.db(branch.branchDatabase);
-    const mainDb = client.db(SEED_DATABASE);
+    const target = await branchManager.createBranch({ name: "ours-target" });
+    const user = await client.db(target.branchDatabase).collection("users").findOne({ role: "admin" });
+    expect(user).not.toBeNull();
 
-    // Get a user for conflict
-    const user = await mainDb.collection("users").findOne({ role: "admin" });
+    await commitEngine.commit({ branchName: "ours-target", message: "Shared base" });
+    const source = await branchManager.createBranch({ name: "ours-source", from: "ours-target" });
 
-    // Modify same user on both sides
-    await branchDb.collection("users").updateOne(
+    await client.db(source.branchDatabase).collection("users").updateOne(
       { _id: user!._id },
       { $set: { name: "Branch Ours" } }
     );
-    await mainDb.collection("users").updateOne(
+    await client.db(target.branchDatabase).collection("users").updateOne(
       { _id: user!._id },
-      { $set: { name: "Main Ours" } }
+      { $set: { name: "Target Ours" } }
     );
+    await client.db(source.branchDatabase).collection("users").insertOne({ name: "No Conflict", role: "new" });
 
-    // Add a non-conflicting doc on branch
-    await branchDb.collection("users").insertOne({ name: "No Conflict", role: "new" });
-
-    // Merge with "ours" strategy — target wins on conflicts
-    const result = await mergeEngine.merge("ours-test", "main", {
+    const result = await mergeEngine.merge("ours-source", "ours-target", {
       detectConflicts: true,
       conflictStrategy: "ours",
     });
 
-    // Non-conflicting insert should succeed
-    const newDoc = await mainDb.collection("users").findOne({ name: "No Conflict" });
+    const newDoc = await client.db(target.branchDatabase).collection("users").findOne({ name: "No Conflict" });
     expect(newDoc).not.toBeNull();
 
-    // Conflicting doc should keep main's version ("ours" = target)
-    const conflictDoc = await mainDb.collection("users").findOne({ _id: user!._id });
-    expect(conflictDoc!.name).toBe("Main Ours");
+    const conflictDoc = await client.db(target.branchDatabase).collection("users").findOne({ _id: user!._id });
+    expect(conflictDoc!.name).toBe("Target Ours");
+  });
+
+  it("does not apply partial writes or mark branch merged with 'abort' strategy", async () => {
+    const target = await branchManager.createBranch({ name: "abort-target" });
+    const user = await client.db(target.branchDatabase).collection("users").findOne({ role: "admin" });
+    expect(user).not.toBeNull();
+
+    await commitEngine.commit({ branchName: "abort-target", message: "Shared base" });
+    const source = await branchManager.createBranch({ name: "abort-source", from: "abort-target" });
+
+    await client.db(source.branchDatabase).collection("users").updateOne(
+      { _id: user!._id },
+      { $set: { name: "Branch Abort" } }
+    );
+    await client.db(source.branchDatabase).collection("users").insertOne({
+      name: "Should Not Merge",
+      email: "abort@test.io",
+      role: "tester",
+      active: true,
+    });
+
+    await client.db(target.branchDatabase).collection("users").updateOne(
+      { _id: user!._id },
+      { $set: { name: "Target Abort" } }
+    );
+
+    const result = await mergeEngine.merge("abort-source", "abort-target", {
+      detectConflicts: true,
+      conflictStrategy: "abort",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.conflicts.length).toBeGreaterThan(0);
+
+    const conflictDoc = await client.db(target.branchDatabase).collection("users").findOne({ _id: user!._id });
+    expect(conflictDoc!.name).toBe("Target Abort");
+
+    const leakedDoc = await client.db(target.branchDatabase).collection("users").findOne({ name: "Should Not Merge" });
+    expect(leakedDoc).toBeNull();
+
+    const meta = await client.db(config.metaDatabase).collection("branches").findOne({
+      name: "abort-source",
+    });
+    expect(meta!.status).toBe("active");
   });
 
   it("applies source version on conflicts with 'theirs' strategy", async () => {
-    const branch = await branchManager.createBranch({ name: "theirs-test" });
-    const branchDb = client.db(branch.branchDatabase);
-    const mainDb = client.db(SEED_DATABASE);
+    const target = await branchManager.createBranch({ name: "theirs-target" });
+    const user = await client.db(target.branchDatabase).collection("users").findOne({ role: "admin" });
+    expect(user).not.toBeNull();
 
-    const user = await mainDb.collection("users").findOne({ role: "admin" });
+    await commitEngine.commit({ branchName: "theirs-target", message: "Shared base" });
+    const source = await branchManager.createBranch({ name: "theirs-source", from: "theirs-target" });
 
-    await branchDb.collection("users").updateOne(
+    await client.db(source.branchDatabase).collection("users").updateOne(
       { _id: user!._id },
       { $set: { name: "Branch Theirs" } }
     );
-    await mainDb.collection("users").updateOne(
+    await client.db(target.branchDatabase).collection("users").updateOne(
       { _id: user!._id },
-      { $set: { name: "Main Theirs" } }
+      { $set: { name: "Target Theirs" } }
     );
 
-    const result = await mergeEngine.merge("theirs-test", "main", {
+    const result = await mergeEngine.merge("theirs-source", "theirs-target", {
       detectConflicts: true,
       conflictStrategy: "theirs",
     });
 
-    // Conflicting doc should use branch version ("theirs" = source)
-    const conflictDoc = await mainDb.collection("users").findOne({ _id: user!._id });
+    expect(result.success).toBe(true);
+    const conflictDoc = await client.db(target.branchDatabase).collection("users").findOne({ _id: user!._id });
     expect(conflictDoc!.name).toBe("Branch Theirs");
+  });
+});
+
+describe("MergeEngine.threeWayMerge — temporary merge-base database", () => {
+  it("keeps the temporary merge-base DB name within MongoDB limits for long meta database names", async () => {
+    const altConfig: MongoBranchConfig = {
+      uri,
+      sourceDatabase: "merge_temp_source",
+      metaDatabase: "__mongobranch_merge_namespace_probe_20260405",
+      branchPrefix: "__mb_mt_",
+    };
+
+    const cleanupAlt = async () => {
+      const { databases } = await client.db("admin").command({ listDatabases: 1 });
+      for (const db of databases) {
+        if (
+          db.name === altConfig.sourceDatabase ||
+          db.name === altConfig.metaDatabase ||
+          db.name.startsWith(altConfig.branchPrefix) ||
+          db.name.startsWith("__mb_tmp_")
+        ) {
+          await client.db(db.name).dropDatabase().catch(() => {});
+        }
+      }
+    };
+
+    await cleanupAlt();
+
+    const altSourceDb = client.db(altConfig.sourceDatabase);
+    await altSourceDb.collection("items").insertOne({ key: "x", value: 1 });
+
+    const altBranchManager = new BranchManager(client, altConfig);
+    await altBranchManager.initialize();
+    const altCommitEngine = new CommitEngine(client, altConfig);
+    await altCommitEngine.initialize();
+    const altMergeEngine = new MergeEngine(client, altConfig);
+
+    const target = await altBranchManager.createBranch({ name: "target" });
+    await altCommitEngine.commit({ branchName: "target", message: "Base" });
+
+    const source = await altBranchManager.createBranch({ name: "source", from: "target" });
+    await client.db(source.branchDatabase).collection("items").updateOne(
+      { key: "x" },
+      { $set: { value: 2 } }
+    );
+    await altCommitEngine.commit({ branchName: "source", message: "Change" });
+
+    const result = await altMergeEngine.threeWayMerge("source", "target", altCommitEngine, {
+      author: "tester",
+    });
+
+    expect(result.success).toBe(true);
+    const merged = await client.db(target.branchDatabase).collection("items").findOne({ key: "x" });
+    expect(merged).not.toBeNull();
+    expect(merged!.value).toBe(2);
+
+    await cleanupAlt();
   });
 });

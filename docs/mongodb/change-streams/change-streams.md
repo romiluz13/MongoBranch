@@ -115,6 +115,38 @@ const resumed = db.collection("users").watch([], {
 })
 ```
 
+## Operation-Time Fences
+
+MongoDB also lets you start a change stream from a specific logical time:
+
+```javascript
+const watchCursor = db.watch([], {
+  startAtOperationTime: someTimestamp
+})
+```
+
+- `startAtOperationTime` is the correct primitive when you want to know whether
+  any change happened **after a reviewed point-in-time**
+- It is mutually exclusive with `resumeAfter` and `startAfter`
+- The starting point must still be in the oplog time range
+
+### MongoBranch Relevance
+
+MongoBranch uses `startAtOperationTime` for:
+- protected deploy approval fences
+- branch drift baselines captured after human or agent review
+- stale-state detection in Atlas Local without polling documents
+
+## Stopping a Change Stream
+
+To stop processing events and free server resources, close the stream explicitly:
+
+```javascript
+await changeStream.close()
+```
+
+For MongoBranch watcher loops, an intentional `close()` during shutdown should be treated as a normal stop path, not as an operational incident.
+
 ## Pipeline Filtering
 
 Filter change stream events using aggregation pipeline:

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * MongoBranch CLI — Git-like branching for MongoDB
  *
@@ -9,8 +9,10 @@
 import { Command } from "commander";
 import { MongoClient } from "mongodb";
 import chalk from "chalk";
-import { existsSync, readFileSync } from "node:fs";
-import { parse as parseYaml } from "yaml";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, resolve } from "node:path";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { BranchManager } from "./core/branch.ts";
 import { DiffEngine } from "./core/diff.ts";
 import { MergeEngine } from "./core/merge.ts";
@@ -27,15 +29,145 @@ import { AuditChainManager } from "./core/audit-chain.ts";
 import { CheckpointManager } from "./core/checkpoint.ts";
 import { BranchProxy } from "./core/proxy.ts";
 import { OperationLog } from "./core/oplog.ts";
+import { EnvironmentDoctor } from "./core/doctor.ts";
+import { DriftManager } from "./core/drift.ts";
+import { AccessControlManager } from "./core/access-control.ts";
 import type { MongoBranchConfig } from "./core/types.ts";
 import { DEFAULT_CONFIG, CLIENT_OPTIONS } from "./core/types.ts";
 
 const program = new Command();
+const DEFAULT_LOCAL_COMPOSE_FILE = "mongobranch.atlas-local.yml";
+const DEFAULT_ROOT_USERNAME = "mongobranch";
+const DEFAULT_ROOT_PASSWORD = "mongobranch-local";
 
 program
   .name("mb")
   .description("MongoBranch — Git-like branching for MongoDB data")
   .version("1.0.0");
+
+program
+  .command("init")
+  .description("Scaffold MongoBranch config and an auth-enabled Atlas Local Docker Compose file")
+  .option("--db <name>", "Source database name", DEFAULT_CONFIG.sourceDatabase)
+  .option("--uri <uri>", "MongoDB connection string (overrides the generated Atlas Local URI)")
+  .option("--meta-db <name>", "MongoBranch metadata database", DEFAULT_CONFIG.metaDatabase)
+  .option("--branch-prefix <prefix>", "Branch database prefix", DEFAULT_CONFIG.branchPrefix)
+  .option("--config-file <path>", "Path to write the MongoBranch YAML config", ".mongobranch.yaml")
+  .option("--compose-file <path>", "Path to write the Atlas Local Docker Compose file", DEFAULT_LOCAL_COMPOSE_FILE)
+  .option("--container-name <name>", "Docker container name for Atlas Local")
+  .option("--root-username <username>", "Atlas Local root username", DEFAULT_ROOT_USERNAME)
+  .option("--root-password <password>", "Atlas Local root password", DEFAULT_ROOT_PASSWORD)
+  .option("--port <port>", "Local Atlas port", "27017")
+  .option("--start-local", "Run `docker compose up -d` after writing the files")
+  .option("--timeout-ms <ms>", "How long to wait for the Atlas Local healthcheck", "120000")
+  .option("--no-compose-file", "Skip writing the Atlas Local Docker Compose file")
+  .option("--no-doctor", "Skip running the environment doctor after bootstrap")
+  .option("--force", "Overwrite existing config/bootstrap files")
+  .option("--json", "Output the bootstrap result as JSON")
+  .action(async (opts) => {
+    const configPath = resolve(String(opts.configFile));
+    const composePath = resolve(String(opts.composeFile));
+    const port = Number.parseInt(String(opts.port), 10) || 27017;
+    const timeoutMs = Number.parseInt(String(opts.timeoutMs), 10) || 120000;
+    const projectSlug = sanitizeProjectSlug(basename(process.cwd()));
+    const containerName = opts.containerName || `mongobranch-${projectSlug}-atlas`;
+    const volumePrefix = containerName.replace(/[^a-zA-Z0-9_.-]/g, "-");
+    const generatedUri = buildMongoUri(String(opts.rootUsername), String(opts.rootPassword), port);
+    const config: MongoBranchConfig = {
+      uri: opts.uri ? String(opts.uri) : generatedUri,
+      sourceDatabase: String(opts.db),
+      metaDatabase: String(opts.metaDb),
+      branchPrefix: String(opts.branchPrefix),
+    };
+
+    if (!opts.force) {
+      if (existsSync(configPath)) {
+        throw new Error(`Config file already exists at ${configPath}. Re-run with --force to overwrite.`);
+      }
+      if (opts.composeFile && existsSync(composePath)) {
+        throw new Error(`Compose file already exists at ${composePath}. Re-run with --force to overwrite.`);
+      }
+    }
+
+    writeFileSync(configPath, stringifyYaml(config), "utf-8");
+
+    if (opts.composeFile) {
+      const compose = buildAtlasLocalCompose({
+        containerName,
+        port,
+        username: String(opts.rootUsername),
+        password: String(opts.rootPassword),
+        volumePrefix,
+      });
+      writeFileSync(composePath, compose, "utf-8");
+    }
+
+    let doctorSummary: { passed: number; warned: number; failed: number } | null = null;
+
+    if (opts.startLocal) {
+      if (!opts.composeFile) {
+        throw new Error("--start-local requires a generated compose file. Remove --no-compose-file or start Atlas Local manually.");
+      }
+
+      runCommand(
+        "docker",
+        ["compose", "-f", composePath, "up", "-d"],
+        `Failed to start Atlas Local with docker compose (${composePath})`,
+      );
+      await waitForContainerHealthy(containerName, timeoutMs);
+    }
+
+    if (opts.doctor && (opts.startLocal || opts.uri)) {
+      const client = new MongoClient(config.uri, CLIENT_OPTIONS);
+      try {
+        await client.connect();
+        const doctor = new EnvironmentDoctor(client, config);
+        const report = await doctor.run({
+          timeoutMs: 15000,
+          includeSearch: true,
+          includeVectorSearch: true,
+        });
+        doctorSummary = report.summary;
+      } finally {
+        await client.close().catch(() => {});
+      }
+    }
+
+    const maskedUri = config.uri.replace(String(opts.rootPassword), "********");
+    const result = {
+      workspace: process.cwd(),
+      configPath,
+      composePath: opts.composeFile ? composePath : null,
+      containerName: opts.composeFile ? containerName : null,
+      uri: config.uri,
+      sourceDatabase: config.sourceDatabase,
+      metaDatabase: config.metaDatabase,
+      branchPrefix: config.branchPrefix,
+      startedLocal: Boolean(opts.startLocal),
+      doctorSummary,
+    };
+
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
+    console.log(chalk.green("✅ MongoBranch bootstrap complete"));
+    console.log(chalk.dim(`   Config: ${configPath}`));
+    if (opts.composeFile) {
+      console.log(chalk.dim(`   Compose: ${composePath}`));
+      console.log(chalk.dim(`   Container: ${containerName}`));
+    }
+    console.log(chalk.dim(`   URI: ${maskedUri}`));
+    if (doctorSummary) {
+      console.log(chalk.dim(`   Doctor: ${doctorSummary.passed} passed, ${doctorSummary.warned} warned, ${doctorSummary.failed} failed`));
+    }
+    console.log(chalk.bold("\nNext steps"));
+    console.log(`  ${chalk.cyan("mb doctor")}`);
+    console.log(`  ${chalk.cyan(`mb branch create ${projectSlug}-experiment`)}`);
+    console.log(`  ${chalk.cyan("mb access status")}`);
+    console.log();
+  });
 
 /**
  * Load config: env vars → .mongobranch.yaml → defaults
@@ -71,6 +203,88 @@ function askConfirm(question: string): Promise<boolean> {
       resolve(data.trim().toLowerCase() === "y");
     });
   });
+}
+
+function sanitizeProjectSlug(value: string): string {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "mongobranch";
+}
+
+function buildMongoUri(username: string, password: string, port: number): string {
+  const user = encodeURIComponent(username);
+  const pass = encodeURIComponent(password);
+  return `mongodb://${user}:${pass}@localhost:${port}/?directConnection=true&authSource=admin`;
+}
+
+function buildAtlasLocalCompose(args: {
+  containerName: string;
+  port: number;
+  username: string;
+  password: string;
+  volumePrefix: string;
+}): string {
+  return [
+    "services:",
+    "  atlas-local:",
+    "    image: mongodb/mongodb-atlas-local:preview",
+    "    hostname: mongodb",
+    `    container_name: ${args.containerName}`,
+    "    ports:",
+    `      - ${args.port}:27017`,
+    "    environment:",
+    `      - MONGODB_INITDB_ROOT_USERNAME=${args.username}`,
+    `      - MONGODB_INITDB_ROOT_PASSWORD=${args.password}`,
+    "      - DO_NOT_TRACK=1",
+    "      - MONGOT_LOG_FILE=/dev/stderr",
+    "      - RUNNER_LOG_FILE=/dev/stderr",
+    "    volumes:",
+    `      - ${args.volumePrefix}_db:/data/db`,
+    `      - ${args.volumePrefix}_configdb:/data/configdb`,
+    `      - ${args.volumePrefix}_mongot:/data/mongot`,
+    "volumes:",
+    `  ${args.volumePrefix}_db:`,
+    `  ${args.volumePrefix}_configdb:`,
+    `  ${args.volumePrefix}_mongot:`,
+    "",
+  ].join("\n");
+}
+
+function runCommand(command: string, args: string[], errorMessage: string): void {
+  const result = spawnSync(command, args, {
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (result.status !== 0) {
+    throw new Error(errorMessage);
+  }
+}
+
+async function waitForContainerHealthy(containerName: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const inspect = spawnSync(
+      "docker",
+      ["inspect", "-f", "{{.State.Health.Status}}", containerName],
+      {
+        encoding: "utf-8",
+        env: process.env,
+      },
+    );
+
+    const status = inspect.stdout?.trim();
+    if (inspect.status === 0 && status === "healthy") return;
+    if (inspect.status === 0 && status === "unhealthy") {
+      throw new Error(`Atlas Local container "${containerName}" reported an unhealthy status`);
+    }
+
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 2000));
+  }
+
+  throw new Error(`Timed out waiting for Atlas Local container "${containerName}" to become healthy`);
 }
 
 async function withBranchManager<T>(
@@ -113,6 +327,327 @@ program
         }
       } else {
         console.log(chalk.dim("\n  No branches. Create one with: mb branch create <name>"));
+      }
+      console.log();
+    });
+  });
+
+program
+  .command("doctor")
+  .description("Probe the connected Atlas Local / MongoDB environment for live feature support")
+  .option("--json", "Output the full report as JSON")
+  .option("--timeout-ms <ms>", "Per-check timeout in milliseconds", "15000")
+  .option("--no-search", "Skip Atlas Search probe")
+  .option("--no-vector-search", "Skip Atlas Vector Search probe")
+  .action(async (opts) => {
+    await withClient(async (client, config) => {
+      const doctor = new EnvironmentDoctor(client, config);
+      const report = await doctor.run({
+        timeoutMs: Number.parseInt(String(opts.timeoutMs), 10) || 15_000,
+        includeSearch: opts.search,
+        includeVectorSearch: opts.vectorSearch,
+      });
+
+      if (opts.json) {
+        console.log(JSON.stringify(report, null, 2));
+        return;
+      }
+
+      console.log(chalk.bold("\n  MongoBranch Environment Doctor\n"));
+      console.log(`  Generated: ${chalk.dim(report.generatedAt.toISOString())}`);
+      if (report.serverInfo?.version) {
+        console.log(`  Server:    ${chalk.cyan(report.serverInfo.version)}`);
+      }
+      console.log(
+        `  Summary:   ${chalk.green(String(report.summary.passed))} passed, ` +
+        `${chalk.yellow(String(report.summary.warned))} warned, ` +
+        `${chalk.red(String(report.summary.failed))} failed`
+      );
+      console.log();
+
+      for (const check of report.checks) {
+        const marker = check.status === "pass"
+          ? chalk.green("PASS")
+          : check.status === "warn"
+            ? chalk.yellow("WARN")
+            : chalk.red("FAIL");
+        console.log(`  ${marker} ${chalk.bold(check.name)}`);
+        console.log(chalk.dim(`    ${check.detail}`));
+        if (check.data && Object.keys(check.data).length > 0) {
+          console.log(chalk.dim(`    ${JSON.stringify(check.data)}`));
+        }
+      }
+      console.log();
+    });
+  });
+
+const drift = program.command("drift").description("Capture and check branch freshness baselines");
+
+drift
+  .command("capture <branch>")
+  .description("Capture a branch drift baseline at the current Atlas Local operationTime")
+  .option("--by <actor>", "Reviewer or agent capturing the baseline", "unknown")
+  .option("--reason <text>", "Why this baseline was captured")
+  .option("--json", "Output the captured baseline as JSON")
+  .action(async (branch: string, opts) => {
+    await withClient(async (client, config) => {
+      const driftManager = new DriftManager(client, config);
+      await driftManager.initialize();
+      const baseline = await driftManager.captureBaseline({
+        branchName: branch,
+        capturedBy: opts.by,
+        reason: opts.reason,
+      });
+
+      if (opts.json) {
+        console.log(JSON.stringify(baseline, null, 2));
+        return;
+      }
+
+      console.log(chalk.green(`✅ Captured drift baseline "${baseline.id}"`));
+      console.log(chalk.dim(`   Branch: ${baseline.branchName}`));
+      console.log(chalk.dim(`   Captured by: ${baseline.capturedBy}`));
+      console.log(chalk.dim(`   Captured at: ${baseline.capturedAt.toISOString()}`));
+      if (baseline.reason) {
+        console.log(chalk.dim(`   Reason: ${baseline.reason}`));
+      }
+    });
+  });
+
+const access = program.command("access").description("Provision and inspect MongoDB access-control identities");
+
+access
+  .command("status")
+  .description("Show authenticated user context and probe whether least-privilege access control is enforced")
+  .option("--json", "Output the access-control status as JSON")
+  .option("--no-probe", "Skip the restricted-user enforcement probe")
+  .action(async (opts) => {
+    await withClient(async (client, config) => {
+      const manager = new AccessControlManager(client, config);
+      await manager.initialize();
+      const status = await manager.getStatus({ probeEnforcement: opts.probe });
+
+      if (opts.json) {
+        console.log(JSON.stringify(status, null, 2));
+        return;
+      }
+
+      console.log(chalk.bold("\n  MongoBranch Access Control Status\n"));
+      const users = status.authenticatedUsers.length > 0
+        ? status.authenticatedUsers.map((entry) => `${entry.user}@${entry.db}`).join(", ")
+        : "none";
+      const roles = status.authenticatedRoles.length > 0
+        ? status.authenticatedRoles.map((entry) => `${entry.role}@${entry.db}`).join(", ")
+        : "none";
+      console.log(`  Admin DB:          ${chalk.cyan(status.adminDatabase)}`);
+      console.log(`  Authenticated:     ${users}`);
+      console.log(`  Roles:             ${roles}`);
+      console.log(`  User management:   ${status.canManageUsers ? chalk.green("yes") : chalk.red("no")}`);
+      console.log(`  Role management:   ${status.canManageRoles ? chalk.green("yes") : chalk.red("no")}`);
+      if (status.enforcementProbe) {
+        const marker = status.enforcementProbe.enforced ? chalk.green("ENFORCED") : chalk.yellow("NOT ENFORCED");
+        console.log(`  Enforcement probe: ${marker}`);
+        console.log(chalk.dim(`    ${status.enforcementProbe.detail}`));
+      }
+      console.log();
+    });
+  });
+
+access
+  .command("provision-branch <branch>")
+  .description("Create a least-privilege MongoDB user scoped to one branch database")
+  .requiredOption("--username <username>", "MongoDB username to create")
+  .requiredOption("--password <password>", "MongoDB password to assign")
+  .requiredOption("--by <actor>", "Who is provisioning this identity")
+  .option("--collections <names>", "Comma-separated allowed collections within the branch DB")
+  .option("--read-only", "Create a read-only identity")
+  .option("--no-search-indexes", "Exclude Atlas Search / Vector Search privileges")
+  .option("--json", "Output the provision result as JSON")
+  .action(async (branch: string, opts) => {
+    await withClient(async (client, config) => {
+      const manager = new AccessControlManager(client, config);
+      await manager.initialize();
+      const result = await manager.provisionBranchAccess({
+        branchName: branch,
+        username: opts.username,
+        password: opts.password,
+        collections: typeof opts.collections === "string"
+          ? opts.collections.split(",").map((value: string) => value.trim()).filter(Boolean)
+          : undefined,
+        readOnly: Boolean(opts.readOnly),
+        includeSearchIndexes: opts.searchIndexes,
+        createdBy: opts.by,
+      });
+
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(chalk.green(`✅ Provisioned branch identity "${result.profile.username}"`));
+      console.log(chalk.dim(`   Branch: ${result.profile.branchName}`));
+      console.log(chalk.dim(`   Role: ${result.profile.roleName}`));
+      console.log(chalk.dim(`   Database: ${result.profile.databaseName}`));
+      console.log(chalk.dim(`   Connection string: ${result.connectionString}`));
+    });
+  });
+
+access
+  .command("provision-deployer")
+  .description("Create a deploy identity scoped to a protected target database")
+  .requiredOption("--username <username>", "MongoDB username to create")
+  .requiredOption("--password <password>", "MongoDB password to assign")
+  .requiredOption("--by <actor>", "Who is provisioning this identity")
+  .option("--target <branch>", "Protected target branch or database owner branch", "main")
+  .option("--write-block-bypass", "Grant bypassWriteBlockingMode for protected deploy windows")
+  .option("--no-search-indexes", "Exclude Atlas Search / Vector Search privileges")
+  .option("--json", "Output the provision result as JSON")
+  .action(async (opts) => {
+    await withClient(async (client, config) => {
+      const manager = new AccessControlManager(client, config);
+      await manager.initialize();
+      const result = await manager.provisionDeployerAccess({
+        username: opts.username,
+        password: opts.password,
+        targetBranch: opts.target,
+        includeSearchIndexes: opts.searchIndexes,
+        allowWriteBlockBypass: Boolean(opts.writeBlockBypass),
+        createdBy: opts.by,
+      });
+
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(chalk.green(`✅ Provisioned deploy identity "${result.profile.username}"`));
+      console.log(chalk.dim(`   Target: ${result.profile.targetBranch}`));
+      console.log(chalk.dim(`   Role: ${result.profile.roleName}`));
+      console.log(chalk.dim(`   Database: ${result.profile.databaseName}`));
+      console.log(chalk.dim(`   Connection string: ${result.connectionString}`));
+    });
+  });
+
+access
+  .command("revoke <username>")
+  .description("Drop a provisioned MongoDB user/role and mark the profile revoked")
+  .requiredOption("--by <actor>", "Who is revoking this identity")
+  .option("--json", "Output the revoked profile as JSON")
+  .action(async (username: string, opts) => {
+    await withClient(async (client, config) => {
+      const manager = new AccessControlManager(client, config);
+      await manager.initialize();
+      const result = await manager.revoke(username, opts.by);
+
+      if (opts.json) {
+        console.log(JSON.stringify({ profile: result }, null, 2));
+        return;
+      }
+
+      if (!result) {
+        console.log(chalk.yellow(`No provisioned access profile found for "${username}".`));
+        return;
+      }
+
+      console.log(chalk.green(`✅ Revoked "${username}"`));
+      console.log(chalk.dim(`   Role: ${result.roleName}`));
+    });
+  });
+
+access
+  .command("list")
+  .description("List provisioned MongoDB access profiles tracked by MongoBranch")
+  .option("--json", "Output the access profiles as JSON")
+  .action(async (opts) => {
+    await withClient(async (client, config) => {
+      const manager = new AccessControlManager(client, config);
+      await manager.initialize();
+      const profiles = await manager.listProfiles();
+
+      if (opts.json) {
+        console.log(JSON.stringify({ profiles }, null, 2));
+        return;
+      }
+
+      if (profiles.length === 0) {
+        console.log(chalk.dim("No access profiles found."));
+        return;
+      }
+
+      console.log(chalk.bold("\n  MongoBranch Access Profiles\n"));
+      for (const profile of profiles) {
+        const scope = profile.kind === "branch" ? profile.branchName : profile.targetBranch;
+        console.log(`  ${chalk.bold(profile.username)} [${profile.kind}/${profile.status}] → ${scope}`);
+        console.log(chalk.dim(`    role=${profile.roleName} db=${profile.databaseName}`));
+      }
+      console.log();
+    });
+  });
+
+drift
+  .command("check [baselineId]")
+  .description("Check whether a branch changed since a captured baseline")
+  .option("--branch <name>", "Use the latest baseline for this branch")
+  .option("--json", "Output the drift check result as JSON")
+  .action(async (baselineId: string | undefined, opts) => {
+    await withClient(async (client, config) => {
+      const driftManager = new DriftManager(client, config);
+      await driftManager.initialize();
+      const result = await driftManager.checkBaseline({
+        baselineId,
+        branchName: opts.branch,
+      });
+
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      const marker = result.drifted ? chalk.red("DRIFTED") : chalk.green("CLEAN");
+      console.log(chalk.bold(`\n  Branch Drift Check\n`));
+      console.log(`  Status:   ${marker}`);
+      console.log(`  Baseline: ${chalk.cyan(result.baseline.id)}`);
+      console.log(`  Branch:   ${chalk.cyan(result.baseline.branchName)}`);
+      console.log(`  Detail:   ${chalk.dim(result.statusReason)}`);
+      console.log();
+    });
+  });
+
+drift
+  .command("list")
+  .description("List captured drift baselines")
+  .option("--branch <name>", "Filter by branch")
+  .option("--status <status>", "Filter by status (clean|drifted)")
+  .option("--limit <n>", "Maximum baselines to return", "20")
+  .option("--json", "Output the baselines as JSON")
+  .action(async (opts) => {
+    await withClient(async (client, config) => {
+      const driftManager = new DriftManager(client, config);
+      await driftManager.initialize();
+      const baselines = await driftManager.listBaselines({
+        branchName: opts.branch,
+        status: opts.status,
+        limit: Number.parseInt(String(opts.limit), 10) || 20,
+      });
+
+      if (opts.json) {
+        console.log(JSON.stringify({ baselines }, null, 2));
+        return;
+      }
+
+      if (baselines.length === 0) {
+        console.log(chalk.dim("No drift baselines found."));
+        return;
+      }
+
+      console.log(chalk.bold(`\n  Drift Baselines (${baselines.length})\n`));
+      for (const baseline of baselines) {
+        const marker = baseline.status === "drifted" ? chalk.red("drifted") : chalk.green("clean");
+        console.log(`  ${chalk.cyan(baseline.id)} ${marker} ${chalk.bold(baseline.branchName)}`);
+        console.log(chalk.dim(`    Captured: ${baseline.capturedAt.toISOString()} by ${baseline.capturedBy}`));
+        if (baseline.lastStatusReason) {
+          console.log(chalk.dim(`    Status: ${baseline.lastStatusReason}`));
+        }
       }
       console.log();
     });

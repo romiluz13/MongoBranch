@@ -91,6 +91,12 @@ db.adminCommand({
     }
   }
 })
+
+// Inspect auth state for the current connection
+db.adminCommand({ connectionStatus: 1, showPrivileges: true })
+
+// Block writes cluster-wide (requires setUserWriteBlockMode privilege)
+db.adminCommand({ setUserWriteBlockMode: 1, global: true })
 ```
 
 ## Profiling (Query Performance)
@@ -128,4 +134,6 @@ for (const d of dbs) {
 | `$out` (cross-DB) | Copy collections to branch database |
 | `replSetGetStatus` | Verify change stream availability |
 | `collStats` | Branch size reporting |
+| `connectionStatus` | Inspect authenticated users/roles before claiming RBAC enforcement |
+| `setUserWriteBlockMode` | Short protected deploy cutover windows (future hardening wave) |
 | `setProfilingLevel` | Performance monitoring per branch |

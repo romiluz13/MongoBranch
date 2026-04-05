@@ -102,7 +102,7 @@ services:
   mongodb:
     image: mongodb/mongodb-atlas-local:preview
     ports:
-      - "27018:27017"
+      - "27017:27017"
     environment:
       - VOYAGE_API_KEY=your-voyage-api-key-here
 ```

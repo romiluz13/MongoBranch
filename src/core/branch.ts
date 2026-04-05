@@ -19,6 +19,7 @@ import {
   COMMITS_COLLECTION,
   sanitizeBranchDbName,
 } from "./types.ts";
+import { CommitEngine } from "./commit.ts";
 
 const BRANCH_NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._\-\/]*$/;
 
@@ -129,6 +130,7 @@ export class BranchManager {
     const branchDatabase = `${this.config.branchPrefix}${safeName}`;
     const sourceDb = this.resolveDatabase(from);
     const branchDb = this.client.db(branchDatabase);
+    let parentMeta: BranchMetadata | null = null;
 
     // Drop any leftover branch database from a previous (deleted) branch.
     // Wait for async drop to complete — Atlas Local can be slow.
@@ -176,7 +178,7 @@ export class BranchManager {
     // Calculate nesting depth
     let parentDepth = 0;
     if (from !== MAIN_BRANCH) {
-      const parentMeta = await this.metaDb
+      parentMeta = await this.metaDb
         .collection<BranchMetadata>(META_COLLECTION)
         .findOne({ name: from, status: { $ne: "deleted" } });
       if (parentMeta) {
@@ -189,6 +191,9 @@ export class BranchManager {
     }
 
     const now = new Date();
+    const inheritedHeadCommit = from === MAIN_BRANCH
+      ? await this.ensureMainHeadCommit(createdBy ?? "system")
+      : parentMeta?.headCommit;
     const metadata: BranchMetadata = {
       name,
       parentBranch: from === MAIN_BRANCH ? MAIN_BRANCH : from,
@@ -204,10 +209,28 @@ export class BranchManager {
       ...(options.readOnly ? { readOnly: true } : {}),
       ...(isLazy ? { lazy: true, materializedCollections: [] } : {}),
       ...(options.ttlMinutes ? { expiresAt: new Date(now.getTime() + options.ttlMinutes * 60_000) } : {}),
+      ...(inheritedHeadCommit ? { headCommit: inheritedHeadCommit } : {}),
     };
 
     await this.metaDb.collection(META_COLLECTION).insertOne({ ...metadata });
     return metadata;
+  }
+
+  private async ensureMainHeadCommit(author: string): Promise<string | undefined> {
+    const commitEngine = new CommitEngine(this.client, this.config);
+    await commitEngine.initialize();
+
+    const existing = await commitEngine.getHeadCommitHash(MAIN_BRANCH);
+    if (existing) {
+      return existing;
+    }
+
+    const bootstrap = await commitEngine.commit({
+      branchName: MAIN_BRANCH,
+      message: "chore: bootstrap main history",
+      author,
+    });
+    return bootstrap.hash;
   }
 
   /**

@@ -85,6 +85,54 @@ describe("MCP Tools — list_branches", () => {
   });
 });
 
+describe("MCP Tools — environment_doctor", () => {
+  it("returns a JSON environment capability report", async () => {
+    const result = await tools.environment_doctor({ timeoutMs: 20_000 });
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.summary.total).toBeGreaterThanOrEqual(5);
+    expect(parsed.checks.some((check: { name: string }) => check.name === "transactions")).toBe(true);
+  }, 45_000);
+});
+
+describe("MCP Tools — access control", () => {
+  it("returns auth context and enforcement status", async () => {
+    const result = await tools.access_control_status({ probeEnforcement: true });
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.adminDatabase).toBe("admin");
+    expect(parsed.enforcementProbe).toBeDefined();
+    expect(typeof parsed.enforcementProbe.enforced).toBe("boolean");
+  }, 45_000);
+});
+
+describe("MCP Tools — branch drift baselines", () => {
+  it("captures and checks branch drift through MCP tools", async () => {
+    await tools.create_branch({ name: "drift-mcp" });
+
+    const baselineResult = await tools.capture_branch_drift_baseline({
+      branchName: "drift-mcp",
+      capturedBy: "codex",
+      reason: "agent review",
+    });
+    expect(baselineResult.isError).toBeUndefined();
+    const baseline = JSON.parse(baselineResult.content[0]!.text);
+    expect(baseline.id).toBeDefined();
+
+    await client.db("__mb_drift-mcp").collection("users").insertOne({
+      name: "Drift User",
+      role: "viewer",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    const checkResult = await tools.check_branch_drift({ baselineId: baseline.id });
+    expect(checkResult.isError).toBeUndefined();
+    const parsed = JSON.parse(checkResult.content[0]!.text);
+    expect(parsed.drifted).toBe(true);
+    expect(parsed.baseline.status).toBe("drifted");
+  });
+});
+
 describe("MCP Tools — diff_branch", () => {
   it("returns no changes for unmodified branch", async () => {
     await tools.create_branch({ name: "clean" });

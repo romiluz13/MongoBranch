@@ -19,7 +19,7 @@ import {
   MAIN_BRANCH,
   META_COLLECTION,
   sanitizeBranchDbName,
-} from "./types.js";
+} from "./types.ts";
 
 export class SearchIndexManager {
   private client: MongoClient;

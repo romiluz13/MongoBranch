@@ -14,6 +14,8 @@ import {
 import { BranchManager } from "../../src/core/branch.ts";
 import { OperationLog } from "../../src/core/oplog.ts";
 import { BranchProxy } from "../../src/core/proxy.ts";
+import { ProtectionManager } from "../../src/core/protection.ts";
+import { ScopeManager } from "../../src/core/scope.ts";
 import type { MongoBranchConfig } from "../../src/core/types.ts";
 import { SEED_DATABASE } from "../seed.ts";
 
@@ -37,6 +39,9 @@ afterAll(async () => {
 beforeEach(async () => {
   await getTestEnvironment();
   await cleanupBranches(client);
+  await client.db("__mongobranch").collection("protections").deleteMany({});
+  await client.db("__mongobranch").collection("agent_scopes").deleteMany({});
+  await client.db("__mongobranch").collection("scope_violations").deleteMany({});
 
   config = {
     uri,
@@ -142,6 +147,89 @@ describe("BranchProxy — read-only protection", () => {
   });
 });
 
+describe("BranchProxy — protection and scope enforcement", () => {
+  it("keeps proxy writes aligned with ProtectionManager deny decisions", async () => {
+    await branchManager.createBranch({ name: "proxy-protected" });
+    const protectionManager = new ProtectionManager(client, config);
+    await protectionManager.initialize();
+    await protectionManager.protectBranch("proxy-protected", { createdBy: "admin" });
+
+    const permission = await protectionManager.checkWritePermission("proxy-protected", false);
+    expect(permission.allowed).toBe(false);
+    expect(permission.reason).toMatch(/protected/i);
+
+    await expect(
+      proxy.insertOne("proxy-protected", "test_col", { name: "Blocked" })
+    ).rejects.toThrow(/protected/i);
+
+    const docs = await client
+      .db("__mb_proxy-protected")
+      .collection("test_col")
+      .find()
+      .toArray();
+    expect(docs).toHaveLength(0);
+
+    const ops = await oplog.getBranchOps("proxy-protected");
+    expect(ops).toHaveLength(0);
+  });
+
+  it("rejects every proxied write operation on protected branches", async () => {
+    const branch = await branchManager.createBranch({ name: "proxy-protected-all" });
+    const protectionManager = new ProtectionManager(client, config);
+    await protectionManager.initialize();
+    await protectionManager.protectBranch("proxy-protected-all", { createdBy: "admin" });
+
+    await client
+      .db(branch.branchDatabase)
+      .collection("test_col")
+      .insertOne({ _id: "seed" as any, name: "Seed", status: "draft" });
+
+    await expect(
+      proxy.insertOne("proxy-protected-all", "test_col", { name: "Blocked" })
+    ).rejects.toThrow(/protected/i);
+    await expect(
+      proxy.updateOne("proxy-protected-all", "test_col", { _id: "seed" }, { $set: { status: "live" } })
+    ).rejects.toThrow(/protected/i);
+    await expect(
+      proxy.updateMany("proxy-protected-all", "test_col", {}, { $set: { status: "live" } })
+    ).rejects.toThrow(/protected/i);
+    await expect(
+      proxy.deleteOne("proxy-protected-all", "test_col", { _id: "seed" })
+    ).rejects.toThrow(/protected/i);
+
+    const docs = await client
+      .db(branch.branchDatabase)
+      .collection("test_col")
+      .find()
+      .toArray();
+    expect(docs).toHaveLength(1);
+    expect(docs[0]!.status).toBe("draft");
+
+    const ops = await oplog.getBranchOps("proxy-protected-all");
+    expect(ops).toHaveLength(0);
+  });
+
+  it("rejects scoped agents without write permission and logs a violation", async () => {
+    await branchManager.createBranch({ name: "proxy-scoped" });
+    const scopeManager = new ScopeManager(client, config);
+    await scopeManager.initialize();
+    await scopeManager.setScope({
+      agentId: "reader-agent",
+      permissions: ["read"],
+      allowedCollections: ["users"],
+    });
+
+    await expect(
+      proxy.insertOne("proxy-scoped", "users", { name: "Denied" }, "reader-agent")
+    ).rejects.toThrow(/lacks "write" permission/i);
+
+    const violations = await scopeManager.getViolations("reader-agent");
+    expect(violations).toHaveLength(1);
+    expect(violations[0]!.collection).toBe("users");
+    expect(violations[0]!.operation).toBe("write");
+  });
+});
+
 describe("BranchProxy.find — lazy branch reads", () => {
   it("reads from source DB for unmaterialized collections", async () => {
     await branchManager.createBranch({ name: "proxy-read-lazy", lazy: true });
@@ -151,6 +239,30 @@ describe("BranchProxy.find — lazy branch reads", () => {
     const mainDb = client.db(SEED_DATABASE);
     const mainCount = await mainDb.collection("users").countDocuments();
     expect(docs.length).toBe(mainCount);
+  });
+
+  it("reads from the lazy parent branch, not root main, for nested lazy branches", async () => {
+    await branchManager.createBranch({ name: "proxy-lazy-parent", lazy: true });
+    const mainDb = client.db(SEED_DATABASE);
+    const seeded = await mainDb.collection("users").findOne({ name: "Alice Chen" });
+    expect(seeded).not.toBeNull();
+
+    await proxy.updateOne(
+      "proxy-lazy-parent",
+      "users",
+      { _id: seeded!._id },
+      { $set: { role: "principal-engineer" } }
+    );
+
+    await branchManager.createBranch({
+      name: "proxy-lazy-child",
+      from: "proxy-lazy-parent",
+      lazy: true,
+    });
+
+    const docs = await proxy.find("proxy-lazy-child", "users", { _id: seeded!._id });
+    expect(docs).toHaveLength(1);
+    expect(docs[0]!.role).toBe("principal-engineer");
   });
 });
 

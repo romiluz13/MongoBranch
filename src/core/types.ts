@@ -1,4 +1,4 @@
-import type { ObjectId } from "mongodb";
+import type { ClientSession, ObjectId, Timestamp } from "mongodb";
 
 export interface BranchMetadata {
   _id?: ObjectId;
@@ -340,6 +340,73 @@ export const SCOPE_VIOLATIONS_COLLECTION = "scope_violations";
 export const SNAPSHOTS_COLLECTION = "snapshots";
 export const MERGE_QUEUE_COLLECTION = "merge_queue";
 
+// ── Access Control Types ─────────────────────────────────────
+
+export const ACCESS_PROFILES_COLLECTION = "access_profiles";
+export const ACCESS_CONTROL_ADMIN_DB = "admin";
+
+export type AccessProfileKind = "branch" | "deployer";
+export type AccessProfileStatus = "provisioned" | "revoked";
+
+export interface AccessProfile {
+  _id?: ObjectId;
+  username: string;
+  roleName: string;
+  kind: AccessProfileKind;
+  status: AccessProfileStatus;
+  branchName?: string;
+  targetBranch?: string;
+  databaseName: string;
+  collections?: string[];
+  readOnly?: boolean;
+  includeSearchIndexes?: boolean;
+  allowWriteBlockBypass?: boolean;
+  createdBy: string;
+  revokedBy?: string;
+  revokedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ProvisionBranchAccessOptions {
+  branchName: string;
+  username: string;
+  password: string;
+  collections?: string[];
+  readOnly?: boolean;
+  includeSearchIndexes?: boolean;
+  createdBy: string;
+}
+
+export interface ProvisionDeployerAccessOptions {
+  username: string;
+  password: string;
+  targetBranch?: string;
+  includeSearchIndexes?: boolean;
+  allowWriteBlockBypass?: boolean;
+  createdBy: string;
+}
+
+export interface ProvisionAccessResult {
+  profile: AccessProfile;
+  connectionString: string;
+}
+
+export interface AccessControlProbeResult {
+  enforced: boolean;
+  detail: string;
+  data?: Record<string, unknown>;
+}
+
+export interface AccessControlStatus {
+  adminDatabase: string;
+  authenticatedUsers: Array<{ user?: string; db?: string }>;
+  authenticatedRoles: Array<{ role?: string; db?: string }>;
+  canManageUsers: boolean;
+  canManageRoles: boolean;
+  enforcementProbe?: AccessControlProbeResult;
+}
+
 // ── Merge Queue Types ───────────────────────────────────────
 
 export type MergeQueueStatus = "pending" | "processing" | "completed" | "failed";
@@ -406,7 +473,7 @@ export interface CommitSnapshot {
 
 export interface CollectionSnapshot {
   documentCount: number;
-  checksum: string;   // SHA-256 of sorted document IDs for fast comparison
+  checksum: string;   // SHA-256 of deterministically serialized documents
 }
 
 export interface CommitOptions {
@@ -414,6 +481,8 @@ export interface CommitOptions {
   message: string;
   author?: string;
   parentOverrides?: string[];  // For merge commits with two parents
+  collectionNames?: string[];
+  session?: ClientSession;
 }
 
 export interface CommitLog {
@@ -486,11 +555,43 @@ export interface DeployRequest {
   diff?: Record<string, unknown>;
   createdBy: string;
   reviewedBy?: string;
+  approvalCapturedAt?: Date;
+  approvalOperationTime?: Timestamp;
+  approvalInvalidatedAt?: Date;
+  approvalInvalidationReason?: string;
+  lastDriftCheckAt?: Date;
   rejectionReason?: string;
   mergedAt?: Date;
   isTargetProtected?: boolean;
   createdAt: Date;
   updatedAt: Date;
+}
+
+// ── Drift Baseline Types ───────────────────────────────────
+
+export const DRIFT_BASELINES_COLLECTION = "drift_baselines";
+
+export type DriftBaselineStatus = "clean" | "drifted";
+
+export interface DriftBaseline {
+  _id?: ObjectId;
+  id: string;
+  branchName: string;
+  capturedBy: string;
+  reason?: string;
+  baselineOperationTime?: Timestamp;
+  status: DriftBaselineStatus;
+  lastStatusReason?: string;
+  lastCheckedAt?: Date;
+  driftedAt?: Date;
+  capturedAt: Date;
+  updatedAt: Date;
+}
+
+export interface DriftCheckResult {
+  baseline: DriftBaseline;
+  drifted: boolean;
+  statusReason: string;
 }
 
 // ── Operation Log Types ───────────────────────────────────
@@ -641,6 +742,36 @@ export interface ExecutionReceipt {
   result: string;          // JSON-serialized tool result
   executedAt: Date;
   expiresAt: Date;
+}
+
+// ── Environment Doctor Types ───────────────────────────────
+
+export type EnvironmentCheckStatus = "pass" | "warn" | "fail";
+
+export interface EnvironmentCheckResult {
+  name: string;
+  status: EnvironmentCheckStatus;
+  detail: string;
+  data?: Record<string, unknown>;
+}
+
+export interface EnvironmentDoctorSummary {
+  total: number;
+  passed: number;
+  warned: number;
+  failed: number;
+}
+
+export interface EnvironmentDoctorReport {
+  generatedAt: Date;
+  config: Pick<MongoBranchConfig, "uri" | "sourceDatabase" | "metaDatabase" | "branchPrefix">;
+  serverInfo?: {
+    version?: string;
+    gitVersion?: string;
+    modules?: string[];
+  };
+  summary: EnvironmentDoctorSummary;
+  checks: EnvironmentCheckResult[];
 }
 
 

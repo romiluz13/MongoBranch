@@ -52,13 +52,35 @@ beforeAll(async () => {
       "  ⚠️  Skipping search index tests — Atlas Local Docker required"
     );
   } else {
-    // Probe whether mongot is actually running (atlas-local:preview may lack it)
+    // Probe whether mongot is actually running and persisting indexes.
+    // Some Atlas Local builds expose the commands but never surface created indexes.
     try {
-      await client
-        .db(SEED_DATABASE)
-        .collection("users")
+      const probeDb = client.db(`${SEED_DATABASE}_search_probe`);
+      await probeDb.dropDatabase().catch(() => {});
+      await probeDb.collection("probe").insertOne({ hello: "world" });
+      await probeDb.collection("probe").createSearchIndex({
+        name: "probe_search",
+        type: "search",
+        definition: {
+          mappings: { dynamic: true },
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      const indexes = await probeDb
+        .collection("probe")
         .listSearchIndexes()
         .toArray();
+
+      if (!indexes.some((index: any) => index.name === "probe_search")) {
+        skipSearchTests = true;
+        console.log(
+          "  ⚠️  Skipping search index tests — Atlas Local accepted createSearchIndex but did not surface the index"
+        );
+      }
+
+      await probeDb.collection("probe").dropSearchIndex("probe_search").catch(() => {});
+      await probeDb.dropDatabase().catch(() => {});
     } catch (err: unknown) {
       const code = (err as { codeName?: string }).codeName;
       const msg = err instanceof Error ? err.message : String(err);

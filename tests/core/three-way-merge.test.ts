@@ -43,6 +43,7 @@ beforeEach(async () => {
   await getTestEnvironment();
   await cleanupBranches(client);
   await client.db("__mongobranch").collection("commits").deleteMany({});
+  await client.db("__mongobranch").collection("commit_data").deleteMany({});
   await client.db("__mongobranch").collection("tags").deleteMany({});
 
   config = {
@@ -115,9 +116,108 @@ describe("Three-Way Merge — Clean merges (no conflicts)", () => {
     // Cleanup
     await sourceDb.collection("tw_test").deleteMany({});
   });
+
+  it("uses the actual ancestor snapshot for child branches instead of root main", async () => {
+    const sourceDb = client.db(SEED_DATABASE);
+    const testId = new ObjectId();
+    await sourceDb.collection("tw_nested_base").insertOne({
+      _id: testId,
+      name: "Nested User",
+      score: 100,
+      status: "draft",
+    });
+
+    const parent = await branchManager.createBranch({ name: "tw-parent" });
+    const parentDb = client.db(parent.branchDatabase);
+    await parentDb.collection("tw_nested_base").updateOne(
+      { _id: testId },
+      { $set: { score: 150 } }
+    );
+    const parentBase = await commitEngine.commit({
+      branchName: "tw-parent",
+      message: "Parent establishes branch base",
+    });
+
+    const child = await branchManager.createBranch({ name: "tw-child", from: "tw-parent" });
+    const childMeta = await branchManager.getBranch("tw-child");
+    expect(childMeta!.headCommit).toBe(parentBase.hash);
+
+    const childDb = client.db(child.branchDatabase);
+    await childDb.collection("tw_nested_base").updateOne(
+      { _id: testId },
+      { $set: { score: 200 } }
+    );
+    await commitEngine.commit({
+      branchName: "tw-child",
+      message: "Child advances score from inherited parent state",
+    });
+
+    const result = await mergeEngine.threeWayMerge(
+      "tw-child",
+      "tw-parent",
+      commitEngine,
+      { author: "test" }
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.conflicts).toHaveLength(0);
+
+    const merged = await parentDb.collection("tw_nested_base").findOne({ _id: testId });
+    expect(merged).not.toBeNull();
+    expect(merged!.score).toBe(200);
+
+    await sourceDb.collection("tw_nested_base").deleteMany({});
+  });
 });
 
 describe("Three-Way Merge — Conflict detection", () => {
+  it("detects stale conflicts against main after a sibling branch merges first", async () => {
+    const sourceDb = client.db(SEED_DATABASE);
+    const testId = new ObjectId();
+    await sourceDb.collection("tw_main_conflict").insertOne({
+      _id: testId,
+      plan: "Support Pro",
+      price: 29,
+    });
+
+    const hotfix = await branchManager.createBranch({ name: "main-hotfix" });
+    const growth = await branchManager.createBranch({ name: "main-growth" });
+
+    await client.db(hotfix.branchDatabase).collection("tw_main_conflict").updateOne(
+      { _id: testId },
+      { $set: { price: 35 } }
+    );
+    await commitEngine.commit({
+      branchName: "main-hotfix",
+      message: "Hotfix raises price to 35",
+    });
+
+    await client.db(growth.branchDatabase).collection("tw_main_conflict").updateOne(
+      { _id: testId },
+      { $set: { price: 39 } }
+    );
+    await commitEngine.commit({
+      branchName: "main-growth",
+      message: "Growth raises price to 39",
+    });
+
+    await mergeEngine.merge("main-hotfix", "main");
+
+    const result = await mergeEngine.threeWayMerge(
+      "main-growth",
+      "main",
+      commitEngine,
+      { dryRun: true, conflictStrategy: "manual" }
+    );
+
+    expect(result.mergeBase).not.toBeNull();
+    expect(result.success).toBe(false);
+    expect(result.conflicts.length).toBeGreaterThan(0);
+    expect(result.conflicts.some((conflict) => conflict.field === "price")).toBe(true);
+
+    await sourceDb.collection("tw_main_conflict").deleteMany({});
+  });
+
   it("detects per-field conflict when both sides change same field", async () => {
     const testId = new ObjectId();
     const sourceDb = client.db(SEED_DATABASE);
@@ -250,6 +350,11 @@ describe("Three-Way Merge — Conflict detection", () => {
     expect(mergeCommit!.parentHashes).toHaveLength(2);
     expect(mergeCommit!.message).toBe("Merge mc-b into mc-a");
 
+    const mergeSnapshot = await commitEngine.getCommitDocuments(result.mergeCommitHash!);
+    const mergedDoc = mergeSnapshot.tw_commit?.find((doc) => String(doc._id) === String(testId));
+    expect(mergedDoc).toBeDefined();
+    expect(mergedDoc!.extra).toBe("new field");
+
     // Cleanup
     await sourceDb.collection("tw_commit").deleteMany({});
   });
@@ -258,7 +363,12 @@ describe("Three-Way Merge — Conflict detection", () => {
 describe("Three-Way Merge — Fallback", () => {
   it("falls back to 2-way merge when no common ancestor exists", async () => {
     await branchManager.createBranch({ name: "no-ancestor" });
-    // No commits at all — no common ancestor
+    await commitEngine.commit({
+      branchName: "no-ancestor",
+      message: "Detached branch root",
+      parentOverrides: [],
+    });
+
     const result = await mergeEngine.threeWayMerge(
       "no-ancestor", "main", commitEngine,
       { dryRun: true }

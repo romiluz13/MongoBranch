@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MongoBranch — Git for MongoDB, Built for AI Agents</title>
-  <meta name="description" content="Git-like version control for MongoDB. Branches, commits, diffs, three-way merges, time travel, and 78 MCP tools for AI agents.">
+  <meta name="description" content="Git-like branching and safe deploy workflows for MongoDB. Branches, commits, diffs, three-way merges, time travel, and 87 MCP tools for AI agents.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -343,7 +343,7 @@
   <!-- HERO -->
   <section class="hero">
     <div class="hero-content">
-      <div class="hero-badge"><span class="dot"></span> v1.0.0 — Published on npm</div>
+      <div class="hero-badge"><span class="dot"></span> v1.0.1 — Published on npm · Requires Bun</div>
       <h1>
         <span class="gradient">Git for MongoDB</span><br>
         Built for AI Agents
@@ -360,9 +360,9 @@
         </div>
       </div>
       <div class="stats-bar">
-        <div class="stat"><div class="stat-value">22</div><div class="stat-label">Engines</div></div>
-        <div class="stat"><div class="stat-value">78</div><div class="stat-label">MCP Tools</div></div>
-        <div class="stat"><div class="stat-value">308</div><div class="stat-label">Tests</div></div>
+        <div class="stat"><div class="stat-value">26</div><div class="stat-label">Engines</div></div>
+        <div class="stat"><div class="stat-value">87</div><div class="stat-label">MCP Tools</div></div>
+        <div class="stat"><div class="stat-value">340</div><div class="stat-label">Tests</div></div>
         <div class="stat"><div class="stat-value">0</div><div class="stat-label">Mocks</div></div>
       </div>
     </div>
@@ -375,7 +375,7 @@
     <div class="container">
       <div class="section-label">Core Capabilities</div>
       <div class="section-title">Everything Git does.<br>For your MongoDB data.</div>
-      <p class="section-subtitle">22 production-ready engines, each battle-tested with real MongoDB — zero mocks, zero compromises.</p>
+      <p class="section-subtitle">26 composable engines, battle-tested with real MongoDB and zero mocks. Production-candidate core, with the remaining operational boundaries documented explicitly.</p>
 
       <div class="features-grid">
         <div class="feature-card">
@@ -462,7 +462,7 @@
           <tr><td>Content-addressed commits</td><td><span class="check">SHA-256 ✓</span></td><td><span class="cross">✗</span></td><td><span class="check">✓</span></td><td><span class="cross">✗</span></td></tr>
           <tr><td>Time travel queries</td><td><span class="check">✓</span></td><td><span class="check">✓</span></td><td><span class="check">✓</span></td><td><span class="check">✓</span></td></tr>
           <tr><td>Agent scoping &amp; ACLs</td><td><span class="check">✓</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td></tr>
-          <tr><td>MCP tool integration</td><td><span class="check">78 tools ✓</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td></tr>
+          <tr><td>MCP tool integration</td><td><span class="check">87 tools ✓</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td></tr>
           <tr><td>PII anonymization</td><td><span class="check">4 strategies ✓</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td></tr>
           <tr><td>Deploy requests</td><td><span class="check">Approval flow ✓</span></td><td><span class="cross">✗</span></td><td><span class="partial">PR-style ~</span></td><td><span class="cross">✗</span></td></tr>
           <tr><td>Hooks &amp; events</td><td><span class="check">14 events ✓</span></td><td><span class="cross">✗</span></td><td><span class="partial">Triggers ~</span></td><td><span class="cross">✗</span></td></tr>
@@ -521,7 +521,7 @@
           <div class="feature-card">
             <div class="icon icon-green">🔒</div>
             <h3>Execution Guard</h3>
-            <p>Branch protection rules prevent direct writes to main. Agents must go through deploy requests with approval workflows.</p>
+            <p>Protected-path writes are blocked inside MongoBranch, and protected deploys fail closed on drift. True server-side direct-write prevention still depends on MongoDB access control being enforced in the target environment.</p>
           </div>
           <div class="feature-card">
             <div class="icon icon-purple">📊</div>
@@ -549,8 +549,8 @@
   <section id="engines">
     <div class="container">
       <div class="section-label">Architecture</div>
-      <div class="section-title">22 engines, one command.</div>
-      <p class="section-subtitle">Each engine is independently testable, composable, and production-ready.</p>
+      <div class="section-title">26 engines, one control plane.</div>
+      <p class="section-subtitle">Each engine is independently testable and composable. Atlas Local preview with auth enabled and least-privilege enforcement is now approved for core AI-agent workflows; broader deployment profiles stay tracked in the readiness docs.</p>
 
       <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin-top: 48px;">
         <div class="engine-pill">🌿 BranchManager</div>
@@ -585,7 +585,7 @@
   <section id="mcp">
     <div class="container">
       <div class="section-label">MCP Integration</div>
-      <div class="section-title">78 tools. One MCP server.</div>
+      <div class="section-title">87 tools. One MCP server.</div>
       <p class="section-subtitle">Every engine is exposed as MCP tools — plug into Claude, Cursor, Windsurf, or any MCP-compatible agent.</p>
 
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 48px;">
@@ -607,7 +607,7 @@
 <span class="fn">open_deploy_request</span>      <span class="cm">// PR-like deploy workflow</span>
 <span class="fn">stash</span>                    <span class="cm">// Stash uncommitted changes</span>
 <span class="fn">create_anonymized_branch</span> <span class="cm">// PII anonymization</span>
-<span class="cm">... and 61 more tools</span>
+<span class="cm">... and 75 more tools</span>
           </div>
         </div>
 
@@ -646,17 +646,17 @@
   <section>
     <div class="container">
       <div class="section-label">Battle Tested</div>
-      <div class="section-title">308 tests. Zero mocks. Real MongoDB.</div>
+      <div class="section-title">340 tests. Zero mocks. Real MongoDB.</div>
       <p class="section-subtitle">Every test runs against a real Atlas Local Docker instance. No fakes, no shortcuts, no surprises in production.</p>
 
       <div class="testing-grid">
         <div class="testing-card green">
-          <div class="big">308</div>
+          <div class="big">340</div>
           <div class="label">Tests passing</div>
         </div>
         <div class="testing-card purple">
-          <div class="big">28</div>
-          <div class="label">Test suites</div>
+          <div class="big">32</div>
+          <div class="label">Test files</div>
         </div>
         <div class="testing-card cyan">
           <div class="big">0</div>
@@ -670,21 +670,12 @@
           <span>bun test — all green</span>
         </div>
         <div class="code-body">
-<span class="str">$</span> bun test
-<span class="cm"> ✓ branch.test.ts          — 12 tests</span>
-<span class="cm"> ✓ branch-operations.test  — 8 tests</span>
-<span class="cm"> ✓ commit.test.ts          — 18 tests</span>
-<span class="cm"> ✓ diff.test.ts            — 9 tests</span>
-<span class="cm"> ✓ merge.test.ts           — 11 tests</span>
-<span class="cm"> ✓ three-way-merge.test    — 14 tests</span>
-<span class="cm"> ✓ timetravel.test.ts      — 12 tests</span>
-<span class="cm"> ✓ agent.test.ts           — 10 tests</span>
-<span class="cm"> ✓ scope.test.ts           — 11 tests</span>
-<span class="cm"> ✓ deploy.test.ts          — 9 tests</span>
-<span class="cm"> ✓ stress.test.ts          — 15 tests</span>
-<span class="cm"> ✓ ... and 13 more suites</span>
+<span class="str">$</span> bun run test
+<span class="cm"> ✓ 32 test files executed against Atlas Local</span>
+<span class="cm"> ✓ commit, merge, deploy, drift, doctor, access-control</span>
+<span class="cm"> ✓ real MongoDB only — zero mocked database calls</span>
 
-<span class="check" style="color: var(--green);">308 pass</span> | <span class="cross" style="color: var(--red);">0 fail</span> | <span style="color: var(--text-dim);">0 skip</span>
+<span class="check" style="color: var(--green);">340 pass</span> | <span class="cross" style="color: var(--red);">0 fail</span> | <span style="color: var(--text-dim);">0 skip</span>
         </div>
       </div>
     </div>
@@ -693,7 +684,7 @@
   <!-- CTA -->
   <section class="cta-section">
     <h2>Give your MongoDB<br>a <span style="background: linear-gradient(135deg, var(--green), var(--cyan)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">branching superpower</span>.</h2>
-    <p>Start in 30 seconds. One install, one Docker command, infinite branches.</p>
+    <p>Start in 30 seconds. One install, one <code>mb init</code>, infinite branches.</p>
     <div class="cta-actions">
       <a href="https://github.com/romiluz13/MongoBranch" class="btn btn-primary" target="_blank" style="padding: 14px 32px; font-size: 1rem;">⭐ Star on GitHub</a>
       <a href="https://github.com/romiluz13/MongoBranch#readme" class="btn btn-ghost" target="_blank" style="padding: 14px 32px; font-size: 1rem;">Read the Docs →</a>

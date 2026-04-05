@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * MongoBranch MCP Server
  *
@@ -60,6 +60,99 @@ async function main(): Promise<void> {
     description: "System overview: active branches, storage usage, recent activity. Use to understand current state.",
     inputSchema: {},
   }, async () => tools.system_status());
+
+  // ── Tool: environment_doctor ──────────────────────────────
+  mcpServer.registerTool("environment_doctor", {
+    description:
+      "Probe the connected MongoDB environment for live support of transactions, change streams, pre-images, " +
+      "Atlas Search, and Atlas Vector Search. Use before relying on Atlas Local preview features.",
+    inputSchema: {
+      timeoutMs: z.number().optional().describe("Per-check timeout in milliseconds"),
+      includeSearch: z.boolean().optional().describe("Include Atlas Search probe (default: true)"),
+      includeVectorSearch: z.boolean().optional().describe("Include Atlas Vector Search probe (default: true)"),
+    },
+  }, async (args) => tools.environment_doctor(args));
+
+  // ── Tool: access control ──────────────────────────────────
+  mcpServer.registerTool("access_control_status", {
+    description:
+      "Inspect the current MongoDB auth context and optionally run a restricted-user probe to verify " +
+      "whether least-privilege access control is actually enforced in this environment.",
+    inputSchema: {
+      probeEnforcement: z.boolean().optional().describe("Run a live restricted-user enforcement probe (default: true)"),
+    },
+  }, async (args) => tools.access_control_status(args));
+
+  mcpServer.registerTool("provision_branch_access", {
+    description:
+      "Create a branch-scoped MongoDB user + role with least-privilege access to one branch database.",
+    inputSchema: {
+      branchName: z.string().describe("Branch to scope the identity to"),
+      username: z.string().describe("MongoDB username to create"),
+      password: z.string().describe("MongoDB password to assign"),
+      collections: z.array(z.string()).optional().describe("Optional allow-list of collections inside the branch DB"),
+      readOnly: z.boolean().optional().describe("Grant read-only access instead of read/write"),
+      includeSearchIndexes: z.boolean().optional().describe("Include Atlas Search / Vector Search privileges"),
+      createdBy: z.string().describe("Who is provisioning this identity"),
+    },
+  }, async (args) => tools.provision_branch_access(args));
+
+  mcpServer.registerTool("provision_deployer_access", {
+    description:
+      "Create a protected-target deploy identity, optionally with write-block bypass for controlled deploy windows.",
+    inputSchema: {
+      username: z.string().describe("MongoDB username to create"),
+      password: z.string().describe("MongoDB password to assign"),
+      targetBranch: z.string().optional().describe("Protected target branch (default: main)"),
+      includeSearchIndexes: z.boolean().optional().describe("Include Atlas Search / Vector Search privileges"),
+      allowWriteBlockBypass: z.boolean().optional().describe("Grant bypassWriteBlockingMode"),
+      createdBy: z.string().describe("Who is provisioning this identity"),
+    },
+  }, async (args) => tools.provision_deployer_access(args));
+
+  mcpServer.registerTool("revoke_access_identity", {
+    description: "Drop a MongoBranch-provisioned MongoDB user/role and mark its metadata profile revoked.",
+    inputSchema: {
+      username: z.string().describe("MongoDB username to revoke"),
+      revokedBy: z.string().describe("Who is revoking this identity"),
+    },
+  }, async (args) => tools.revoke_access_identity(args));
+
+  mcpServer.registerTool("list_access_profiles", {
+    description: "List MongoBranch-managed MongoDB access profiles.",
+    inputSchema: {},
+  }, async () => tools.list_access_profiles());
+
+  // ── Tool: branch drift baselines ──────────────────────────
+  mcpServer.registerTool("capture_branch_drift_baseline", {
+    description:
+      "Capture a branch freshness baseline using MongoDB operationTime. " +
+      "Use this right after review or approval so agents can later verify the branch stayed unchanged.",
+    inputSchema: {
+      branchName: z.string().describe("Branch to baseline, or 'main' for the source database"),
+      capturedBy: z.string().optional().describe("Reviewer or agent identity"),
+      reason: z.string().optional().describe("Why this baseline was captured"),
+    },
+  }, async (args) => tools.capture_branch_drift_baseline(args));
+
+  mcpServer.registerTool("check_branch_drift", {
+    description:
+      "Check whether a branch changed since a captured baseline. " +
+      "Provide a baselineId, or provide branchName to use the latest baseline for that branch.",
+    inputSchema: {
+      baselineId: z.string().optional().describe("Specific drift baseline ID"),
+      branchName: z.string().optional().describe("Branch name to resolve its latest baseline"),
+    },
+  }, async (args) => tools.check_branch_drift(args));
+
+  mcpServer.registerTool("list_branch_drift_baselines", {
+    description: "List captured drift baselines, optionally filtered by branch or status.",
+    inputSchema: {
+      branchName: z.string().optional().describe("Filter by branch name"),
+      status: z.enum(["clean", "drifted"]).optional().describe("Filter by drift status"),
+      limit: z.number().optional().describe("Maximum number of baselines to return"),
+    },
+  }, async (args) => tools.list_branch_drift_baselines(args));
 
   // ── Tool: list_branches ─────────────────────────────────────
   mcpServer.registerTool("list_branches", {
@@ -258,6 +351,7 @@ async function main(): Promise<void> {
       branchName: z.string().describe("Target branch"),
       collection: z.string().describe("Collection name"),
       document: z.record(z.string(), z.unknown()).describe("Document to insert"),
+      agentId: z.string().optional().describe("Agent identity for scope enforcement"),
       performedBy: z.string().optional().describe("Who performed this"),
     },
   }, async (args) => tools.branch_insert(args));
@@ -270,6 +364,7 @@ async function main(): Promise<void> {
       collection: z.string().describe("Collection name"),
       filter: z.record(z.string(), z.unknown()).describe("Query filter"),
       update: z.record(z.string(), z.unknown()).describe("Update expression (e.g. {$set: {...}})"),
+      agentId: z.string().optional().describe("Agent identity for scope enforcement"),
       performedBy: z.string().optional().describe("Who performed this"),
     },
   }, async (args) => tools.branch_update(args));
@@ -281,6 +376,7 @@ async function main(): Promise<void> {
       branchName: z.string().describe("Target branch"),
       collection: z.string().describe("Collection name"),
       filter: z.record(z.string(), z.unknown()).describe("Query filter"),
+      agentId: z.string().optional().describe("Agent identity for scope enforcement"),
       performedBy: z.string().optional().describe("Who performed this"),
     },
   }, async (args) => tools.branch_delete(args));
@@ -341,6 +437,7 @@ async function main(): Promise<void> {
       collection: z.string().describe("Collection name"),
       filter: z.record(z.string(), z.unknown()).describe("Query filter selecting documents to update"),
       update: z.record(z.string(), z.unknown()).describe("Update expression (e.g. {$set: {...}})"),
+      agentId: z.string().optional().describe("Agent identity for scope enforcement"),
       performedBy: z.string().optional().describe("Who performed this"),
     },
   }, async (args) => tools.branch_update_many(args));
